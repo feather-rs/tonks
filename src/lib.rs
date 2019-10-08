@@ -1,65 +1,46 @@
-mod scheduler;
-mod system_data;
+#[macro_use]
+extern crate derivative;
 
-use std::any::{Any, TypeId};
-pub use system_data::{EventTrigger, SystemData};
+use shred::World;
+
+mod scheduler;
+
+pub use scheduler::{Scheduler, SchedulerBuilder};
+use shred::ResourceId;
+use shred::SystemData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum EventHandleStratgy {
     Immediate,
-    BeforeAccesses,
+    BeforeDependent,
     Relaxed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EventedId(TypeId);
-
-impl EventedId {
-    pub fn new<T>() -> Self
-    where
-        T: Event,
-    {
-        EventedId(TypeId::of::<T>())
-    }
-}
-
-pub trait Event: Any + Send + Sync {
-    fn handle_strategy() -> EventHandleStratgy {
-        EventHandleStratgy::BeforeAccesses
-    }
-}
-
-pub trait System<'a>: Send {
+pub trait System<'a>: Send + Sync {
     type SystemData: SystemData<'a>;
 
-    fn run(&mut self, data: Self::SystemData);
-}
+    fn run(&self, data: Self::SystemData);
 
-pub trait EventHandler<'a, E>: Send
-where
-    E: Event,
-{
-    type HandlerData: SystemData<'a>;
-
-    fn handle(&mut self, data: &mut Self::HandlerData, event: &E);
-}
-
-pub struct EventBuffer<E>
-where
-    E: Event,
-{
-    events: Vec<E>,
-}
-
-impl<E> EventBuffer<E>
-where
-    E: Event,
-{
-    pub fn events(&self) -> &[E] {
-        &self.events
+    fn reads(&self) -> Vec<ResourceId> {
+        Self::SystemData::reads()
     }
 
-    pub fn clear(&mut self) {
-        self.events.clear();
+    fn writes(&self) -> Vec<ResourceId> {
+        Self::SystemData::writes()
+    }
+}
+
+pub trait RunNow<'a>: Send + Sync {
+    fn run_now(&self, world: &'a World);
+}
+
+impl<'a, S> RunNow<'a> for S
+where
+    S: System<'a>,
+{
+    fn run_now(&self, world: &'a World) {
+        let data = S::SystemData::fetch(world);
+        self.run(data);
     }
 }
