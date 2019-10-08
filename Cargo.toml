@@ -23,3 +23,8 @@ nightly = ["shred/nightly", "specs/nightly", "parking_lot/nightly"]
 
 [dev-dependencies]
 static_assertions = "1.0.0"
+criterion = "0.3.0"
+
+[[bench]]
+name = "basic"
+harness = false

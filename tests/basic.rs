@@ -35,8 +35,18 @@ impl<'a> System<'a> for TestSystem3 {
     }
 }
 
+struct TestSystem4;
+
+impl<'a> System<'a> for TestSystem4 {
+    type SystemData = Read<'a, TestResource>;
+
+    fn run(&self, data: Self::SystemData) {
+        assert_eq!(data.0, 5);
+    }
+}
+
 #[test]
-fn basic_three_systems() {
+fn basic_four_systems() {
     let mut world = World::new();
     world.insert(TestResource(0));
 
@@ -44,9 +54,48 @@ fn basic_three_systems() {
         .with(TestSystem1, "1", &[])
         .with(TestSystem2, "2", &["1"])
         .with(TestSystem3, "3", &["2"])
+        .with(TestSystem4, "4", &[])
         .build();
 
     println!("{:?}", scheduler);
 
     scheduler.execute(&world);
+}
+
+#[test]
+fn concurrent_reads() {
+    let mut world = World::new();
+    world.insert(TestResource(5));
+
+    let mut builder = SchedulerBuilder::new();
+
+    for _ in 0..128 {
+        builder.add(TestSystem3, "", &[]);
+    }
+
+    let mut scheduler = builder.build();
+
+    println!("{:?}", scheduler);
+
+    scheduler.execute(&world);
+}
+
+#[test]
+#[should_panic]
+fn duplicate_system_names() {
+    let _ = SchedulerBuilder::new()
+        .with(TestSystem1, "1", &[])
+        .with(TestSystem2, "2", &["1"])
+        .with(TestSystem3, "2", &["2"])
+        .build();
+}
+
+#[test]
+#[should_panic]
+fn unknown_runs_after() {
+    let _ = SchedulerBuilder::new()
+        .with(TestSystem1, "1", &[])
+        .with(TestSystem2, "2", &["1"])
+        .with(TestSystem3, "3", &["3"])
+        .build();
 }

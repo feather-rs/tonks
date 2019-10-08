@@ -296,8 +296,8 @@ impl<'a> Scheduler<'a> {
             match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held) {
                 Ok(()) => {
                     // Run task and proceed.
-                    self.dispatch_task(task, world);
-                    self.runnning_systems += 1;
+                    let systems = self.dispatch_task(task, world);
+                    self.runnning_systems += systems;
                 }
                 Err(()) => {
                     // Execution is blocked: wait for tasks to finish.
@@ -348,15 +348,20 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    fn dispatch_task(&self, task: Task, world: &World) {
+    /// Dispatches a task, returning the number of systems spawned.
+    fn dispatch_task(&self, task: Task, world: &World) -> usize {
         match task {
             Task::Stage(id) => {
                 let systems = &self.stages[id.0];
                 systems
                     .iter()
                     .for_each(|sys| self.dispatch_system(*sys, world));
+                systems.len()
             }
-            Task::Oneshot(id) => self.dispatch_system(id, world),
+            Task::Oneshot(id) => {
+                self.dispatch_system(id, world);
+                1
+            }
         }
     }
 
