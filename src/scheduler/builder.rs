@@ -46,6 +46,8 @@ impl<'a> SchedulerBuilder<'a> {
             );
         }
 
+        self.known_systems.insert(String::from(name));
+
         let reads: HashSet<_> = sys.reads().into_iter().collect();
         let writes: HashSet<_> = sys.writes().into_iter().collect();
 
