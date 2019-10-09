@@ -13,7 +13,7 @@ mod no_dependencies {
         type SystemData = ();
 
         fn run(&self, data: Self::SystemData) {
-            waste_time();
+            // Do nothing
         }
     }
 
@@ -21,14 +21,7 @@ mod no_dependencies {
         type SystemData = ();
 
         fn run(&mut self, data: Self::SystemData) {
-            waste_time();
-        }
-    }
-
-    // Attempt to simulate actual system execution patterns.
-    fn waste_time() {
-        for _ in 0..1000 {
-            black_box(0);
+            // Do nothing
         }
     }
 
