@@ -3,6 +3,7 @@ use bit_set::BitSet;
 use bumpalo::Bump;
 use crossbeam::{Receiver, Sender};
 use hashbrown::HashMap;
+use rayon::prelude::*;
 use shred::{ResourceId, World};
 use smallvec::smallvec;
 use smallvec::SmallVec;
@@ -13,6 +14,7 @@ use thread_local::ThreadLocal;
 mod builder;
 
 pub use builder::SchedulerBuilder;
+use std::mem;
 
 /// Internal ID used to identify resources.
 /// These are allocated consecutively so that
@@ -37,57 +39,37 @@ type Stage = SmallVec<[SystemId; 6]>;
 
 type ResourceVec = SmallVec<[InternalResourceId; 8]>;
 
-/// Raw pointer to the world.
-struct WorldPtr(*const World);
+/// A raw pointer to some `T`.
+///
+/// # Safety
+/// This type implements `Send` and `Sync`, but it is
+/// up to the user to ensure that:
+/// * If the pointer is dereferenced, the value has not been dropped.
+/// * No data races occur.
+struct SharedRawPtr<T>(*const T);
 
-// We can implement Send and Sync for this because
-// during the execution of a system which holds
-// a reference to `WorldPtr`, the scheduler continues
-// to run. During this time, the scheduler holds
-// a shared reference to `World`, and thus
-// it cannot mutate or drop it.
-unsafe impl Send for WorldPtr {}
-unsafe impl Sync for WorldPtr {}
+unsafe impl<T: Send> Send for SharedRawPtr<T> {}
+unsafe impl<T: Sync> Sync for SharedRawPtr<T> {}
 
-/// Raw pointer to a system.
-struct SystemPtr(*const Arc<dyn RunNow<'static>>);
+/*
+/// A mutable raw pointer to some `T`.
+///
+/// # Safety
+/// This type implements `Send` and `Sync`, but it is
+/// up to the user to ensure that:
+/// * If the pointer is dereferenced, the value has not been dropped.
+/// * No data races occur.
+struct SharedMutRawPtr<T>(*mut T);
 
-impl SystemPtr {
-    unsafe fn from_arc<'a>(arc: &Arc<dyn RunNow<'a>>) -> Self {
-        // Transmute to static lifetime.
-        let arc = std::mem::transmute::<_, &Arc<dyn RunNow<'static>>>(arc);
-        Self(arc as *const Arc<dyn RunNow<'static>>)
-    }
+unsafe impl<T: Send> Send for SharedMutRawPtr<T> {}
+unsafe impl<T: Sync> Sync for SharedMutRawPtr<T> {}
+*/
+
+/// A message sent from a running task to the scheduler.
+enum TaskMessage {
+    SystemComplete(SystemId),
+    StageComplete(StageId),
 }
-
-// Same applies as above.
-unsafe impl Send for SystemPtr {}
-unsafe impl Sync for SystemPtr {}
-
-/// A message sent from a running system to the scheduler.
-enum SystemMessage {
-    /// A system completed execution. Any non-immediately executed
-    /// events are sent in addition so that the scheduler can queue these.
-    ///
-    /// We send the events in the same message as the completion message
-    /// to reduce channel send overhead.
-    Completed {
-        /// The ID of the completed system.
-        id: SystemId,
-        /// Vector of events which this system executed.
-        ///
-        /// # Safety
-        /// Each pointer __must__ point to a valid event with the same
-        /// type corresponding to the `InternalEventId`. Each pointer __must__
-        /// be allocated in one of the thread-local bump allocators to ensure
-        /// they are deallocated on dispatch end.
-        // An inline size of 3 is used to attempt to keep this type
-        // within one cache line.
-        events: SmallVec<[(*mut (), EventId); 3]>,
-    },
-}
-
-unsafe impl Send for SystemMessage {}
 
 /// A task to run. This can either be a stage (mutliple systems run in parallel),
 /// a oneshot system, or an event handling pipeline.
@@ -160,10 +142,10 @@ pub struct Scheduler<'a> {
 
     /// Receiving end of the channel used to communicate with running systems.
     #[derivative(Debug = "ignore")]
-    receiver: Receiver<SystemMessage>,
+    receiver: Receiver<TaskMessage>,
     /// Sending end of the above channel. This can be cloned and sent to systems.
     #[derivative(Debug = "ignore")]
-    sender: Sender<SystemMessage>,
+    sender: Sender<TaskMessage>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -304,23 +286,22 @@ impl<'a> Scheduler<'a> {
                     // Re-push the task we attempted to run to the queue.
                     // TODO: optimize this
                     self.task_queue.push_front(task);
-                    self.wait_for_completion();
-                    self.runnning_systems -= 1;
+                    let num = self.wait_for_completion();
+                    self.runnning_systems -= num;
                 }
             }
         }
 
         // Wait for remaining systems to complete.
         while self.runnning_systems > 0 {
-            self.wait_for_completion();
-            self.runnning_systems -= 1;
+            let num = self.wait_for_completion();
+            self.runnning_systems -= num;
         }
     }
 
-    /// Waits until a task has completed, also submitting
-    /// any events or oneshot systems requested by the
-    /// task to the task queue.
-    fn wait_for_completion(&mut self) {
+    /// Waits until one or more systems have completed, returning
+    /// the number of systems registered.
+    fn wait_for_completion(&mut self) -> usize {
         // Unwrap is allowed because the channel never becomes disconnected
         // (`Scheduler` holds a `Sender` handle for it).
         // This will never block indefinitely because there are always
@@ -329,8 +310,13 @@ impl<'a> Scheduler<'a> {
 
         match msg {
             // TODO: events
-            SystemMessage::Completed { id, .. } => {
+            TaskMessage::SystemComplete(id) => {
                 self.release_resources_for_system(id);
+                1
+            }
+            TaskMessage::StageComplete(id) => {
+                self.release_resources_for_stage(id);
+                self.stages[id.0].len()
             }
         }
     }
@@ -348,15 +334,22 @@ impl<'a> Scheduler<'a> {
         }
     }
 
+    fn release_resources_for_stage(&mut self, id: StageId) {
+        for read in &self.stage_reads[id.0] {
+            self.reads_held[read.0] -= 1;
+        }
+
+        for write in &self.stage_writes[id.0] {
+            self.writes_held.remove(write.0);
+        }
+    }
+
     /// Dispatches a task, returning the number of systems spawned.
     fn dispatch_task(&self, task: Task, world: &World) -> usize {
         match task {
             Task::Stage(id) => {
-                let systems = &self.stages[id.0];
-                systems
-                    .iter()
-                    .for_each(|sys| self.dispatch_system(*sys, world));
-                systems.len()
+                self.dispatch_stage(id, world);
+                self.stages[id.0].len()
             }
             Task::Oneshot(id) => {
                 self.dispatch_system(id, world);
@@ -365,25 +358,62 @@ impl<'a> Scheduler<'a> {
         }
     }
 
+    fn dispatch_stage(&self, id: StageId, world: &World) {
+        // Rather than spawning each system independently, we optimize
+        // this by running them in batch. This reduces synchronization overhead
+        // with the scheduler using channels.
+        let stage = SharedRawPtr(&self.stages[id.0] as *const Stage);
+        let world = SharedRawPtr(world as *const World);
+
+        let systems = unsafe {
+            mem::transmute::<
+                &Vec<Arc<(dyn RunNow<'a> + 'static)>>,
+                &Vec<Arc<(dyn RunNow<'static> + 'static)>>,
+            >(&self.systems)
+        };
+        let systems = SharedRawPtr(systems as *const Vec<_>);
+
+        let sender = self.sender.clone();
+
+        rayon::spawn(move || {
+            unsafe {
+                (&*stage.0)
+                    .par_iter()
+                    .map(|sys_id| &(&*systems.0)[sys_id.0])
+                    .for_each(|sys: &Arc<(dyn RunNow + 'static)>| sys.run_now(&*(world.0)));
+            }
+
+            // TODO: events, oneshot
+            sender.send(TaskMessage::StageComplete(id)).unwrap();
+        });
+    }
+
     fn dispatch_system(&self, id: SystemId, world: &World) {
-        let sys = unsafe { SystemPtr::from_arc(&self.systems[id.0]) };
-        let world = WorldPtr(world as *const World);
+        // `RunNow` has a lifetime parameter 'a, but
+        // it is only used to ensure that the `SystemData`
+        // outlives the `World`.
+        // Because the `World` will remain valid while the system
+        // is running (`execute()` does not return until all systems
+        // complete), we can safely cast `RunNow<'a>` to `RunNow<'static>`.
+        let sys = unsafe {
+            Arc::clone(mem::transmute::<
+                &Arc<dyn RunNow<'a>>,
+                &Arc<dyn RunNow<'static>>,
+            >(&self.systems[id.0]))
+        };
+        let world = SharedRawPtr(world as *const World);
+
         let sender = self.sender.clone();
         rayon::spawn(move || {
             unsafe {
                 // Safety: the world is not dropped while the system
                 // executes, since `execute` will not return until
                 // all systems have completed.
-                (&*(sys.0)).run_now(&*(world.0));
+                sys.run_now(&*(world.0));
             }
 
             // TODO: events
-            sender
-                .send(SystemMessage::Completed {
-                    id,
-                    events: smallvec![],
-                })
-                .unwrap();
+            sender.send(TaskMessage::SystemComplete(id)).unwrap();
         });
     }
 }

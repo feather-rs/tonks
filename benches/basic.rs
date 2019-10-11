@@ -12,7 +12,7 @@ mod no_dependencies {
     impl<'a> tonks::System<'a> for TestSystem {
         type SystemData = ();
 
-        fn run(&self, data: Self::SystemData) {
+        fn run(&self, _data: Self::SystemData) {
             waste_time();
         }
     }
@@ -20,7 +20,7 @@ mod no_dependencies {
     impl<'a> shred::System<'a> for TestSystem {
         type SystemData = ();
 
-        fn run(&mut self, data: Self::SystemData) {
+        fn run(&mut self, _data: Self::SystemData) {
             waste_time();
         }
     }
