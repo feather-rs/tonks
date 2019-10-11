@@ -1,7 +1,8 @@
 use crate::RunNow;
 use bit_set::BitSet;
 use bumpalo::Bump;
-use hashbrown::{HashMap, HashSet};
+use crossbeam::{Receiver, Sender};
+use hashbrown::HashMap;
 use shred::{ResourceId, World};
 use smallvec::smallvec;
 use smallvec::SmallVec;
@@ -9,13 +10,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use thread_local::ThreadLocal;
 
-mod atomic_bit_set;
 mod builder;
 
-pub use atomic_bit_set::AtomicBitSet;
 pub use builder::SchedulerBuilder;
-use std::cell::RefCell;
-use std::iter;
 
 /// Internal ID used to identify resources.
 /// These are allocated consecutively so that
@@ -67,11 +64,6 @@ impl SystemPtr {
 unsafe impl Send for SystemPtr {}
 unsafe impl Sync for SystemPtr {}
 
-struct SystemMessagePtr(*mut Option<SystemMessage>);
-
-unsafe impl Send for SystemMessagePtr {}
-unsafe impl Sync for SystemMessagePtr {}
-
 /// A message sent from a running system to the scheduler.
 enum SystemMessage {
     /// A system completed execution. Any non-immediately executed
@@ -118,8 +110,8 @@ pub struct Scheduler<'a> {
     /// The starting task queue for any dispatch.
     starting_queue: VecDeque<Task>,
 
-    /// Set of currently running systems.
-    running_systems: RefCell<HashSet<SystemId>>,
+    /// Number of currently running systems.
+    runnning_systems: usize,
 
     /// Bit set representing write resources which are currently held.
     ///
@@ -166,20 +158,12 @@ pub struct Scheduler<'a> {
     /// This vector is indexed by the `StageId`.
     stage_writes: Vec<ResourceVec>,
 
-    /// Bit set with set bits for each system which has completed
-    /// executing. This is cleared at the end of every dispatch.
-    ///
-    /// This set is indexed by the `SystemId`.
+    /// Receiving end of the channel used to communicate with running systems.
     #[derivative(Debug = "ignore")]
-    finished: Arc<AtomicBitSet>,
-    /// Vector of `SystemMessage`s received from completed systems.
-    /// Upon completion, systems will set their value in this
-    /// vector to their desired message before setting their
-    /// bit in `finished`.
-    ///
-    /// This vector is indexed by the `SystemId`.
+    receiver: Receiver<SystemMessage>,
+    /// Sending end of the above channel. This can be cloned and sent to systems.
     #[derivative(Debug = "ignore")]
-    messages: RefCell<Vec<Option<SystemMessage>>>,
+    sender: Sender<SystemMessage>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -253,11 +237,14 @@ impl<'a> Scheduler<'a> {
             stage_systems.push(systems_in_stage);
         }
 
+        // We use a bounded channel of capacity 1 because the only overhead
+        // is typically on the sender's side—the receiver, the scheduler, should
+        // plow through messages. This may be changed in the future.
+        let (sender, receiver) = crossbeam::bounded(1);
+
         let bump = ThreadLocal::new();
 
         let starting_queue = Self::create_task_queue(&stage_systems);
-
-        let num_systems = systems.len();
 
         Self {
             starting_queue,
@@ -266,7 +253,7 @@ impl<'a> Scheduler<'a> {
             writes_held: BitSet::with_capacity(resource_id_mappings.len()),
             reads_held: vec![0; resource_id_mappings.len()],
 
-            running_systems: RefCell::new(HashSet::with_capacity(16)),
+            runnning_systems: 0,
 
             systems,
             stages: stage_systems,
@@ -278,8 +265,8 @@ impl<'a> Scheduler<'a> {
 
             bump,
 
-            finished: Arc::new(AtomicBitSet::with_capacity(num_systems)),
-            messages: RefCell::new(iter::repeat_with(|| None).take(num_systems).collect()),
+            sender,
+            receiver,
             resource_id_mappings,
         }
     }
@@ -309,7 +296,8 @@ impl<'a> Scheduler<'a> {
             match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held) {
                 Ok(()) => {
                     // Run task and proceed.
-                    self.dispatch_task(task, world);
+                    let systems = self.dispatch_task(task, world);
+                    self.runnning_systems += systems;
                 }
                 Err(()) => {
                     // Execution is blocked: wait for tasks to finish.
@@ -317,43 +305,34 @@ impl<'a> Scheduler<'a> {
                     // TODO: optimize this
                     self.task_queue.push_front(task);
                     self.wait_for_completion();
+                    self.runnning_systems -= 1;
                 }
             }
         }
 
         // Wait for remaining systems to complete.
-        while !self.running_systems.borrow().is_empty() {
+        while self.runnning_systems > 0 {
             self.wait_for_completion();
+            self.runnning_systems -= 1;
         }
-
-        self.finished.clear();
     }
 
     /// Waits until a task has completed, also submitting
     /// any events or oneshot systems requested by the
     /// task to the task queue.
     fn wait_for_completion(&mut self) {
-        // Wait for one or more systems to be completed.
-        self.finished.wait_on_update();
+        // Unwrap is allowed because the channel never becomes disconnected
+        // (`Scheduler` holds a `Sender` handle for it).
+        // This will never block indefinitely because there are always
+        // systems running when this is invoked.
+        let msg = self.receiver.recv().unwrap();
 
-        // Go through all running systems and check if they completed.
-        let mut completed: SmallVec<[_; 4]> = smallvec![];
-        for system in self.running_systems.borrow().iter() {
-            if self.finished.contains(system.0) {
-                completed.push(*system);
-                let msg = self.messages.borrow_mut()[system.0].take().unwrap();
-
-                match msg {
-                    // TODO: events
-                    SystemMessage::Completed { .. } => (),
-                }
+        match msg {
+            // TODO: events
+            SystemMessage::Completed { id, .. } => {
+                self.release_resources_for_system(id);
             }
         }
-
-        completed.into_iter().for_each(|system| {
-            self.release_resources_for_system(system);
-            self.running_systems.borrow_mut().remove(&system);
-        });
     }
 
     fn release_resources_for_system(&mut self, id: SystemId) {
@@ -374,11 +353,10 @@ impl<'a> Scheduler<'a> {
         match task {
             Task::Stage(id) => {
                 let systems = &self.stages[id.0];
-                let len = systems.len();
                 systems
                     .iter()
                     .for_each(|sys| self.dispatch_system(*sys, world));
-                len
+                systems.len()
             }
             Task::Oneshot(id) => {
                 self.dispatch_system(id, world);
@@ -390,31 +368,22 @@ impl<'a> Scheduler<'a> {
     fn dispatch_system(&self, id: SystemId, world: &World) {
         let sys = unsafe { SystemPtr::from_arc(&self.systems[id.0]) };
         let world = WorldPtr(world as *const World);
-
-        let finished = Arc::clone(&self.finished);
-
-        // Safety: the same system does not run at the same time,
-        // so there is never more than one reference to this
-        // message.
-        let msg =
-            SystemMessagePtr((&mut self.messages.borrow_mut()[id.0]) as *mut Option<SystemMessage>);
-
-        self.running_systems.borrow_mut().insert(id);
-
+        let sender = self.sender.clone();
         rayon::spawn(move || {
             unsafe {
                 // Safety: the world is not dropped while the system
                 // executes, since `execute` will not return until
                 // all systems have completed.
                 (&*(sys.0)).run_now(&*(world.0));
-
-                *(msg.0) = Some(SystemMessage::Completed {
-                    id,
-                    events: smallvec![],
-                });
             }
 
-            finished.insert(id.0, true);
+            // TODO: events
+            sender
+                .send(SystemMessage::Completed {
+                    id,
+                    events: smallvec![],
+                })
+                .unwrap();
         });
     }
 }
@@ -483,6 +452,6 @@ mod tests {
 
     #[test]
     fn check_scheduler_traits() {
-        static_assertions::assert_impl_all!(Scheduler: Send);
+        static_assertions::assert_impl_all!(Scheduler: Send, Sync);
     }
 }
