@@ -16,11 +16,11 @@ pub enum EnumExecutionStrategy {
     Immediate,
 }
 
-pub trait ExecutionStrategy {
+pub trait ExecutionStrategy: private::Sealed {
     fn strategy() -> EnumExecutionStrategy;
 }
 
-pub trait OneshotExecutionStrategy: ExecutionStrategy {}
+pub trait OneshotExecutionStrategy: ExecutionStrategy + private::OneshotSealed {}
 
 pub struct Relaxed;
 impl ExecutionStrategy for Relaxed {
@@ -63,3 +63,17 @@ pub trait System<'a>: Send + Sync {
 pub trait Event: Send + Sync {}
 
 impl<T> Event for T where T: Send + Sync {}
+
+mod private {
+    use crate::{BeforeDependents, Immediate, Relaxed};
+
+    pub trait Sealed {}
+
+    impl Sealed for Immediate {}
+    impl Sealed for BeforeDependents {}
+    impl Sealed for Relaxed {}
+
+    pub trait OneshotSealed {}
+    impl OneshotSealed for BeforeDependents {}
+    impl OneshotSealed for Relaxed {}
+}

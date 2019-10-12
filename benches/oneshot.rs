@@ -3,8 +3,8 @@ extern crate criterion;
 
 use criterion::{BenchmarkId, Criterion};
 use shred::World;
-use tonks::{Oneshot, Relaxed, SchedulerBuilder, System};
 use specs::WorldExt;
+use tonks::{Oneshot, Relaxed, SchedulerBuilder, System};
 
 struct TestSystem(u32);
 
@@ -13,8 +13,7 @@ impl<'a> System<'a> for TestSystem {
     type Oneshot = Oneshot<Relaxed>;
 
     fn run(&self, _data: Self::SystemData, oneshot: Self::Oneshot) {
-        (0..self.0)
-            .for_each(|_| oneshot.schedule(OneshotSystem));
+        (0..self.0).for_each(|_| oneshot.schedule(OneshotSystem));
     }
 }
 
