@@ -1,6 +1,6 @@
 use shred::{Read, Write};
 use specs::{World, WorldExt};
-use tonks::{Oneshot, Relaxed, SchedulerBuilder, System};
+use tonks::{EndOfDispatch, Oneshot, SchedulerBuilder, System};
 
 struct TestSystem1;
 
@@ -9,7 +9,7 @@ struct TestResource(u32);
 
 impl<'a> System<'a> for TestSystem1 {
     type SystemData = Read<'a, TestResource>;
-    type Oneshot = Oneshot<Relaxed>;
+    type Oneshot = Oneshot<EndOfDispatch>;
 
     fn run(&self, data: Self::SystemData, oneshot: Self::Oneshot) {
         if data.0 == 5 {
@@ -22,7 +22,7 @@ struct OneshotSystem;
 
 impl<'a> System<'a> for OneshotSystem {
     type SystemData = Write<'a, TestResource>;
-    type Oneshot = Oneshot<Relaxed>;
+    type Oneshot = Oneshot<EndOfDispatch>;
 
     fn run(&self, mut data: Self::SystemData, oneshot: Self::Oneshot) {
         data.0 += 1;

@@ -22,21 +22,21 @@ pub trait ExecutionStrategy: private::Sealed {
 
 pub trait OneshotExecutionStrategy: ExecutionStrategy + private::OneshotSealed {}
 
-pub struct Relaxed;
-impl ExecutionStrategy for Relaxed {
+pub struct EndOfDispatch;
+impl ExecutionStrategy for EndOfDispatch {
     fn strategy() -> EnumExecutionStrategy {
         EnumExecutionStrategy::Relaxed
     }
 }
-impl OneshotExecutionStrategy for Relaxed {}
+impl OneshotExecutionStrategy for EndOfDispatch {}
 
-pub struct BeforeDependents;
-impl ExecutionStrategy for BeforeDependents {
+pub struct Next;
+impl ExecutionStrategy for Next {
     fn strategy() -> EnumExecutionStrategy {
         EnumExecutionStrategy::BeforeDependents
     }
 }
-impl OneshotExecutionStrategy for BeforeDependents {}
+impl OneshotExecutionStrategy for Next {}
 
 pub struct Immediate;
 impl ExecutionStrategy for Immediate {
@@ -65,15 +65,15 @@ pub trait Event: Send + Sync {}
 impl<T> Event for T where T: Send + Sync {}
 
 mod private {
-    use crate::{BeforeDependents, Immediate, Relaxed};
+    use crate::{EndOfDispatch, Immediate, Next};
 
     pub trait Sealed {}
 
     impl Sealed for Immediate {}
-    impl Sealed for BeforeDependents {}
-    impl Sealed for Relaxed {}
+    impl Sealed for Next {}
+    impl Sealed for EndOfDispatch {}
 
     pub trait OneshotSealed {}
-    impl OneshotSealed for BeforeDependents {}
-    impl OneshotSealed for Relaxed {}
+    impl OneshotSealed for Next {}
+    impl OneshotSealed for EndOfDispatch {}
 }

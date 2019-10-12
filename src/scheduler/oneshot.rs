@@ -40,9 +40,7 @@ pub trait OneshotTuple {
 }
 
 impl OneshotTuple for () {
-    fn from_ctx(_ctx: Context) -> Self {
-        ()
-    }
+    fn from_ctx(_ctx: Context) -> Self {}
 }
 
 // Only implement for up to 3 types because

@@ -81,6 +81,7 @@ unsafe impl<T: Sync> Sync for SharedMutRawPtr<T> {}
 */
 
 /// A message sent from a running task to the scheduler.
+#[allow(dead_code)]
 pub(crate) enum TaskMessage {
     /// Indicates that the system with the given ID
     /// completed.
