@@ -9,8 +9,9 @@ struct TestSystem1;
 
 impl<'a> System<'a> for TestSystem1 {
     type SystemData = Write<'a, TestResource>;
+    type Oneshot = ();
 
-    fn run(&self, mut data: Self::SystemData) {
+    fn run(&self, mut data: Self::SystemData, _oneshot: Self::Oneshot) {
         data.0 = 1;
     }
 }
@@ -19,8 +20,9 @@ struct TestSystem2;
 
 impl<'a> System<'a> for TestSystem2 {
     type SystemData = Write<'a, TestResource>;
+    type Oneshot = ();
 
-    fn run(&self, mut data: Self::SystemData) {
+    fn run(&self, mut data: Self::SystemData, _oneshot: Self::Oneshot) {
         data.0 = 5;
     }
 }
@@ -29,8 +31,9 @@ struct TestSystem3;
 
 impl<'a> System<'a> for TestSystem3 {
     type SystemData = Read<'a, TestResource>;
+    type Oneshot = ();
 
-    fn run(&self, data: Self::SystemData) {
+    fn run(&self, data: Self::SystemData, _oneshot: Self::Oneshot) {
         assert_eq!(data.0, 5);
     }
 }
@@ -39,8 +42,9 @@ struct TestSystem4;
 
 impl<'a> System<'a> for TestSystem4 {
     type SystemData = Read<'a, TestResource>;
+    type Oneshot = ();
 
-    fn run(&self, data: Self::SystemData) {
+    fn run(&self, data: Self::SystemData, _oneshot: Self::Oneshot) {
         assert_eq!(data.0, 5);
     }
 }

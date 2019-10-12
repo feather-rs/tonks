@@ -2,7 +2,7 @@
 extern crate criterion;
 
 mod no_dependencies {
-    use criterion::{black_box, BenchmarkId, Criterion};
+    use criterion::{BenchmarkId, Criterion};
     use shred::World;
     use specs::{DispatcherBuilder, WorldExt};
     use tonks::SchedulerBuilder;
@@ -11,25 +11,15 @@ mod no_dependencies {
 
     impl<'a> tonks::System<'a> for TestSystem {
         type SystemData = ();
+        type Oneshot = ();
 
-        fn run(&self, _data: Self::SystemData) {
-            waste_time();
-        }
+        fn run(&self, _data: Self::SystemData, _oneshot: Self::Oneshot) {}
     }
 
     impl<'a> shred::System<'a> for TestSystem {
         type SystemData = ();
 
-        fn run(&mut self, _data: Self::SystemData) {
-            waste_time();
-        }
-    }
-
-    // Attempt to simulate actual system execution patterns.
-    fn waste_time() {
-        for _ in 0..1000 {
-            black_box(0);
-        }
+        fn run(&mut self, _data: Self::SystemData) {}
     }
 
     const SYSTEM_COUNTS: [u32; 6] = [1, 2, 8, 64, 256, 1024];

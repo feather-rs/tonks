@@ -1,5 +1,5 @@
+use crate::scheduler::run_now::RunNow;
 use crate::scheduler::Scheduler;
-use crate::RunNow;
 use crate::System;
 use hashbrown::HashSet;
 use shred::ResourceId;
@@ -102,7 +102,7 @@ impl<'a> SchedulerBuilder<'a> {
         stage.system_writes.push(writes.into_iter().collect());
     }
 
-    pub fn build(self) -> Scheduler<'a> {
+    pub fn build(self) -> Scheduler {
         let mut stages = Vec::with_capacity(self.stages.len());
         let mut read_deps = vec![];
         let mut write_deps = vec![];

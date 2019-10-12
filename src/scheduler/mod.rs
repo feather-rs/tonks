@@ -1,4 +1,4 @@
-use crate::RunNow;
+use crate::EnumExecutionStrategy;
 use bit_set::BitSet;
 use bumpalo::Bump;
 use crossbeam::{Receiver, Sender};
@@ -8,30 +8,43 @@ use shred::{ResourceId, World};
 use smallvec::smallvec;
 use smallvec::SmallVec;
 use std::collections::VecDeque;
+use std::mem;
 use std::sync::Arc;
 use thread_local::ThreadLocal;
 
 mod builder;
+mod oneshot;
+mod run_now;
 
 pub use builder::SchedulerBuilder;
-use std::mem;
+pub use oneshot::{Oneshot, OneshotTuple};
+use run_now::RunNow;
+
+/// Context of a running system, used for internal purposes.
+#[derive(Clone)]
+pub struct Context {
+    /// The ID of this system.
+    pub(crate) id: SystemId,
+    /// Sender for communicating with the scheduler.
+    pub(crate) sender: Sender<TaskMessage>,
+}
 
 /// Internal ID used to identify resources.
 /// These are allocated consecutively so that
 /// they can be used as indices into vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct InternalResourceId(usize);
+pub(crate) struct InternalResourceId(usize);
 /// Internal ID used to identify systems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct SystemId(usize);
+pub(crate) struct SystemId(usize);
 /// Internal ID used to identify stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct StageId(usize);
+pub(crate) struct StageId(usize);
 /// Internal ID used to identify event types.
 /// These are allocated consecutively so that
 /// they can be used as indices into vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct EventId(usize);
+pub(crate) struct EventId(usize);
 
 /// A stage in the completion of a dispatch. Each stage
 /// contains systems which can be executed in parallel.
@@ -51,6 +64,8 @@ struct SharedRawPtr<T>(*const T);
 unsafe impl<T: Send> Send for SharedRawPtr<T> {}
 unsafe impl<T: Sync> Sync for SharedRawPtr<T> {}
 
+type DynSystem<'a> = (dyn RunNow<'a> + 'static);
+
 /*
 /// A mutable raw pointer to some `T`.
 ///
@@ -66,9 +81,30 @@ unsafe impl<T: Sync> Sync for SharedMutRawPtr<T> {}
 */
 
 /// A message sent from a running task to the scheduler.
-enum TaskMessage {
+pub(crate) enum TaskMessage {
+    /// Indicates that the system with the given ID
+    /// completed.
+    ///
+    /// Note that this is not sent for ordinary systems in
+    /// a stage, since the overhead of sending so many
+    /// messages would be too great. Instead, `StageComplete`
+    /// is sent to indicate that all systems in a stage completed
+    /// at once.
+    ///
+    /// This is only used for oneshot systems and event handlers.
     SystemComplete(SystemId),
+    /// Indicates that all systems in a stage have completed.
     StageComplete(StageId),
+    /// Requests that a one-shot system be run with the given
+    /// `EnumExecutionStrategy`. The scheduler will run the
+    /// system as requested.
+    ///
+    /// The ID of the currently running system must be provided.
+    ScheduleOneshot {
+        scheduling_system: SystemId,
+        system: Box<DynSystem<'static>>,
+        strategy: EnumExecutionStrategy,
+    },
 }
 
 /// A task to run. This can either be a stage (mutliple systems run in parallel),
@@ -84,7 +120,7 @@ enum Task {
 /// but has more features.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Scheduler<'a> {
+pub struct Scheduler {
     /// Queue of tasks to run during the current dispatch.
     ///
     /// Each dispatch, this queue is reset to `starting_queue`.
@@ -119,7 +155,7 @@ pub struct Scheduler<'a> {
     ///
     /// This vector is indexed by the `SystemId`.
     #[derivative(Debug = "ignore")]
-    systems: Vec<Arc<(dyn RunNow<'a> + 'static)>>,
+    systems: Vec<Arc<DynSystem<'static>>>,
     /// Vector containing the systems for each stage.
     stages: Vec<Stage>,
 
@@ -140,6 +176,15 @@ pub struct Scheduler<'a> {
     /// This vector is indexed by the `StageId`.
     stage_writes: Vec<ResourceVec>,
 
+    /// Original system count when this scheduler was initialized.
+    ///
+    /// Since "temporary" systems can be added during dispatch (e.g.
+    /// one-shots), we use this value to remove those.
+    original_system_count: usize,
+    /// Counter used to allocate temporary system IDs. This is reset
+    /// to `original_system_count` at the start of dispatch.
+    temp_system_id_counter: usize,
+
     /// Receiving end of the channel used to communicate with running systems.
     #[derivative(Debug = "ignore")]
     receiver: Receiver<TaskMessage>,
@@ -148,7 +193,7 @@ pub struct Scheduler<'a> {
     sender: Sender<TaskMessage>,
 }
 
-impl<'a> Scheduler<'a> {
+impl Scheduler {
     /// Creates a new `Scheduler` with the given stages.
     ///
     /// `deps` is a vector indexed by the system ID containing
@@ -157,7 +202,7 @@ impl<'a> Scheduler<'a> {
     /// # Contract
     /// The stages are assumed to have been assembled correctly:
     /// no two systems in a stage may conflict with each other.
-    fn new(
+    fn new<'a>(
         stages: Vec<Vec<Box<(dyn RunNow<'a> + 'static)>>>,
         read_deps: Vec<Vec<ResourceId>>,
         write_deps: Vec<Vec<ResourceId>>,
@@ -228,6 +273,20 @@ impl<'a> Scheduler<'a> {
 
         let starting_queue = Self::create_task_queue(&stage_systems);
 
+        let original_system_count = systems.len();
+
+        // `RunNow` has a lifetime parameter 'a, but
+        // it is only used to ensure that the `SystemData`
+        // outlives the `World`.
+        // Because the `World` will remain valid while the system
+        // is running (`execute()` does not return until all systems
+        // complete), we can safely cast `RunNow<'a>` to `RunNow<'static>`.
+        let systems = unsafe {
+            systems
+                .into_iter()
+                .map(|sys| mem::transmute::<Arc<DynSystem<'a>>, Arc<DynSystem<'static>>>(sys))
+                .collect()
+        };
         Self {
             starting_queue,
             task_queue: VecDeque::new(), // Replaced in `execute()`
@@ -246,6 +305,9 @@ impl<'a> Scheduler<'a> {
             stage_writes,
 
             bump,
+
+            original_system_count,
+            temp_system_id_counter: original_system_count,
 
             sender,
             receiver,
@@ -272,35 +334,59 @@ impl<'a> Scheduler<'a> {
         // complete by listening on the channel.
         while let Some(task) = self.task_queue.pop_front() {
             // Attempt to run task.
-            let reads = reads_for_task(&self.stage_reads, &self.system_reads, &task);
-            let writes = writes_for_task(&self.stage_writes, &self.system_writes, &task);
-
-            match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held) {
-                Ok(()) => {
-                    // Run task and proceed.
-                    let systems = self.dispatch_task(task, world);
-                    self.runnning_systems += systems;
-                }
-                Err(()) => {
-                    // Execution is blocked: wait for tasks to finish.
-                    // Re-push the task we attempted to run to the queue.
-                    // TODO: optimize this
-                    self.task_queue.push_front(task);
-                    let num = self.wait_for_completion();
-                    self.runnning_systems -= num;
-                }
-            }
+            self.run_task(world, task);
         }
 
         // Wait for remaining systems to complete.
         while self.runnning_systems > 0 {
             let num = self.wait_for_completion();
             self.runnning_systems -= num;
+
+            // Run any handlers/oneshots scheduled by these systems
+            while let Some(task) = self.task_queue.pop_front() {
+                self.run_task(world, task);
+            }
+        }
+
+        // Clean up.
+        self.reset_temp_systems();
+    }
+
+    fn run_task(&mut self, world: &World, task: Task) {
+        let reads = reads_for_task(&self.stage_reads, &self.system_reads, &task);
+        let writes = writes_for_task(&self.stage_writes, &self.system_writes, &task);
+
+        match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held) {
+            Ok(()) => {
+                // Run task and proceed.
+                let systems = self.dispatch_task(task, world);
+                self.runnning_systems += systems;
+            }
+            Err(()) => {
+                // Execution is blocked: wait for tasks to finish.
+                // Re-push the task we attempted to run to the queue.
+                // TODO: optimize this
+                self.task_queue.push_front(task);
+                let num = self.wait_for_completion();
+                self.runnning_systems -= num;
+            }
         }
     }
 
-    /// Waits until one or more systems have completed, returning
-    /// the number of systems registered.
+    /// Removes any temporary systems which were allocated during dispatch.
+    fn reset_temp_systems(&mut self) {
+        self.system_reads
+            .resize_with(self.original_system_count, || unreachable!());
+        self.system_writes
+            .resize_with(self.original_system_count, || unreachable!());
+        self.systems
+            .resize_with(self.original_system_count, || unreachable!());
+        self.temp_system_id_counter = self.original_system_count;
+    }
+
+    /// Waits for messages from running systems and handles them.
+    ///
+    /// At any point, returns with the number of systems which have completed.
     fn wait_for_completion(&mut self) -> usize {
         // Unwrap is allowed because the channel never becomes disconnected
         // (`Scheduler` holds a `Sender` handle for it).
@@ -317,6 +403,20 @@ impl<'a> Scheduler<'a> {
             TaskMessage::StageComplete(id) => {
                 self.release_resources_for_stage(id);
                 self.stages[id.0].len()
+            }
+            TaskMessage::ScheduleOneshot {
+                system, strategy, ..
+            } => {
+                match strategy {
+                    EnumExecutionStrategy::Relaxed => {
+                        // Push system to back of task queue and indicate that no
+                        // systems completed.
+                        let id = self.create_temp_system(system);
+                        self.task_queue.push_back(Task::Oneshot(id));
+                        0
+                    }
+                    _ => unimplemented!(),
+                }
             }
         }
     }
@@ -344,6 +444,30 @@ impl<'a> Scheduler<'a> {
         }
     }
 
+    fn create_temp_system(&mut self, system: Box<DynSystem<'static>>) -> SystemId {
+        let id = SystemId(self.temp_system_id_counter);
+        self.temp_system_id_counter += 1;
+
+        self.system_reads.push(
+            system
+                .reads()
+                .into_iter()
+                .map(|res| self.resource_id_mappings[&res])
+                .collect(),
+        );
+        self.system_writes.push(
+            system
+                .writes()
+                .into_iter()
+                .map(|res| self.resource_id_mappings[&res])
+                .collect(),
+        );
+        self.systems.push(system.into());
+        debug_assert_eq!(self.system_writes.len(), self.temp_system_id_counter);
+
+        id
+    }
+
     /// Dispatches a task, returning the number of systems spawned.
     fn dispatch_task(&self, task: Task, world: &World) -> usize {
         match task {
@@ -365,13 +489,7 @@ impl<'a> Scheduler<'a> {
         let stage = SharedRawPtr(&self.stages[id.0] as *const Stage);
         let world = SharedRawPtr(world as *const World);
 
-        let systems = unsafe {
-            mem::transmute::<
-                &Vec<Arc<(dyn RunNow<'a> + 'static)>>,
-                &Vec<Arc<(dyn RunNow<'static> + 'static)>>,
-            >(&self.systems)
-        };
-        let systems = SharedRawPtr(systems as *const Vec<_>);
+        let systems = SharedRawPtr(&self.systems as *const Vec<Arc<DynSystem<'static>>>);
 
         let sender = self.sender.clone();
 
@@ -379,8 +497,14 @@ impl<'a> Scheduler<'a> {
             unsafe {
                 (&*stage.0)
                     .par_iter()
-                    .map(|sys_id| &(&*systems.0)[sys_id.0])
-                    .for_each(|sys: &Arc<(dyn RunNow + 'static)>| sys.run_now(&*(world.0)));
+                    .map(|sys_id| (sys_id, &(&*systems.0)[sys_id.0]))
+                    .for_each(|(id, sys)| {
+                        let ctx = Context {
+                            sender: sender.clone(),
+                            id: *id,
+                        };
+                        sys.run_now(&*(world.0), ctx)
+                    });
             }
 
             // TODO: events, oneshot
@@ -389,27 +513,24 @@ impl<'a> Scheduler<'a> {
     }
 
     fn dispatch_system(&self, id: SystemId, world: &World) {
-        // `RunNow` has a lifetime parameter 'a, but
-        // it is only used to ensure that the `SystemData`
-        // outlives the `World`.
-        // Because the `World` will remain valid while the system
-        // is running (`execute()` does not return until all systems
-        // complete), we can safely cast `RunNow<'a>` to `RunNow<'static>`.
-        let sys = unsafe {
-            Arc::clone(mem::transmute::<
-                &Arc<dyn RunNow<'a>>,
-                &Arc<dyn RunNow<'static>>,
-            >(&self.systems[id.0]))
-        };
+        self.dispatch_raw_system(id, &self.systems[id.0], world);
+    }
+
+    fn dispatch_raw_system(&self, id: SystemId, system: &Arc<DynSystem<'static>>, world: &World) {
         let world = SharedRawPtr(world as *const World);
+        let sys = Arc::clone(system);
 
         let sender = self.sender.clone();
         rayon::spawn(move || {
+            let ctx = Context {
+                sender: sender.clone(),
+                id,
+            };
             unsafe {
                 // Safety: the world is not dropped while the system
                 // executes, since `execute` will not return until
                 // all systems have completed.
-                sys.run_now(&*(world.0));
+                sys.run_now(&*(world.0), ctx);
             }
 
             // TODO: events
