@@ -19,6 +19,7 @@ mod run_now;
 pub use builder::SchedulerBuilder;
 pub use oneshot::{Oneshot, OneshotTuple};
 use run_now::RunNow;
+use std::any::TypeId;
 
 /// Context of a running system, used for internal purposes.
 #[derive(Clone)]
@@ -144,6 +145,8 @@ pub struct Scheduler {
 
     /// Mapping from `shred::ResourceId` to `InternalResourceId`.
     resource_id_mappings: HashMap<ResourceId, InternalResourceId>,
+    /// Mapping from `TypeId` of events to `EventId`.
+    event_id_mappings: HashMap<TypeId, EventId>,
 
     /// Thread-local bump allocator used to allocate events.
     ///
@@ -313,6 +316,7 @@ impl Scheduler {
             sender,
             receiver,
             resource_id_mappings,
+            event_id_mappings: HashMap::new(),
         }
     }
 

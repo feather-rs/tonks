@@ -1,12 +1,15 @@
 #[macro_use]
 extern crate derivative;
 
+mod event_handler;
 mod scheduler;
 
+pub use crate::event_handler::EventHandler;
 use crate::scheduler::OneshotTuple;
 pub use scheduler::{Oneshot, Scheduler, SchedulerBuilder};
 use shred::ResourceId;
 use shred::SystemData;
+use std::any::Any;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -60,9 +63,9 @@ pub trait System<'a>: Send + Sync {
     }
 }
 
-pub trait Event: Send + Sync {}
+pub trait Event: Send + Sync + Any {}
 
-impl<T> Event for T where T: Send + Sync {}
+impl<T> Event for T where T: Send + Sync + Any + 'static {}
 
 mod private {
     use crate::{EndOfDispatch, Immediate, Next};

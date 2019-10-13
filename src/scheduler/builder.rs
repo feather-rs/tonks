@@ -1,15 +1,18 @@
+use crate::event_handler::RawEventHandler;
 use crate::scheduler::run_now::RunNow;
 use crate::scheduler::Scheduler;
-use crate::System;
-use hashbrown::HashSet;
+use crate::{EventHandler, System};
+use hashbrown::{HashMap, HashSet};
 use shred::ResourceId;
+use std::any::TypeId;
 
 /// Builder for a `Scheduler`. This is responsible
 /// for segmenting `System`s into stages based on their
 /// resource requirements.
 #[derive(Default)]
 pub struct SchedulerBuilder<'a> {
-    stages: Vec<Stage<'a>>,
+    stages: Vec<Stage<Box<dyn RunNow<'a>>>>,
+    event_stages: HashMap<TypeId, Vec<Stage<Box<dyn RawEventHandler<'a>>>>>,
     known_systems: HashSet<String>,
 }
 
@@ -51,55 +54,35 @@ impl<'a> SchedulerBuilder<'a> {
         let reads: HashSet<_> = sys.reads().into_iter().collect();
         let writes: HashSet<_> = sys.writes().into_iter().collect();
 
-        // Iterate over stages in `self` and attempt to find a stage which does not
-        // conflict with this system. If none are found, append a new stage.
-        let stage = {
-            let mut result = None;
-            for (index, stage) in self.stages.iter_mut().enumerate() {
-                if stage.writes.intersection(&writes).count() > 0 {
-                    // Write resource conflict
-                    continue;
-                }
+        add_element(
+            &mut self.stages,
+            Box::new(sys),
+            reads,
+            writes,
+            runs_after,
+            Some(name),
+        );
+    }
 
-                if stage.writes.intersection(&reads).count() > 0 {
-                    // Read resource conflict
-                    continue;
-                }
+    pub fn add_handler<H>(&mut self, handler: H)
+    where
+        H: EventHandler<'a> + 'static,
+    {
+        let reads: HashSet<_> = handler.reads().into_iter().collect();
+        let writes: HashSet<_> = handler.writes().into_iter().collect();
 
-                // Check runs_after relationships
-                if runs_after
-                    .iter()
-                    .any(|after| stage.system_names.contains(*after))
-                {
-                    continue;
-                }
-
-                // All checks succeeded: this stage will work
-                result = Some(index);
-            }
-
-            match result {
-                Some(stage) => stage,
-                None => {
-                    // No stage found: create one.
-                    self.stages.push(Stage::default());
-                    self.stages.len() - 1
-                }
-            }
-        };
-
-        // Add data to stage.
-        let stage = &mut self.stages[stage];
-        reads.iter().for_each(|read| {
-            stage.reads.insert(read.clone());
-        });
-        writes.iter().for_each(|write| {
-            stage.writes.insert(write.clone());
-        });
-        stage.system_names.insert(String::from(name));
-        stage.systems.push(Box::new(sys));
-        stage.system_reads.push(reads.into_iter().collect());
-        stage.system_writes.push(writes.into_iter().collect());
+        let stages_for_event = self
+            .event_stages
+            .entry(TypeId::of::<H::Event>())
+            .or_insert_with(|| vec![]);
+        add_element(
+            stages_for_event,
+            Box::new(handler),
+            reads,
+            writes,
+            &[],
+            None,
+        );
     }
 
     pub fn build(self) -> Scheduler {
@@ -124,11 +107,74 @@ impl<'a> SchedulerBuilder<'a> {
     }
 }
 
-#[derive(Default)]
-struct Stage<'a> {
+fn add_element<T>(
+    stages: &mut Vec<Stage<T>>,
+    element: T,
     reads: HashSet<ResourceId>,
     writes: HashSet<ResourceId>,
-    systems: Vec<Box<dyn RunNow<'a>>>,
+    runs_after: &[&str],
+    name: Option<&str>,
+) {
+    // Iterate over stages and attempt to find a stage which does not
+    // conflict with this system. If none are found, append a new stage.
+    let stage = {
+        let mut result = None;
+        for (index, stage) in stages.iter_mut().enumerate() {
+            if stage.writes.intersection(&writes).count() > 0 {
+                // Write resource conflict
+                continue;
+            }
+
+            if stage.writes.intersection(&reads).count() > 0 {
+                // Read resource conflict
+                continue;
+            }
+
+            // Check runs_after relationships
+            if runs_after
+                .iter()
+                .any(|after| stage.system_names.contains(*after))
+            {
+                continue;
+            }
+
+            // All checks succeeded: this stage will work
+            result = Some(index);
+        }
+
+        match result {
+            Some(stage) => stage,
+            None => {
+                // No stage found: create one.
+                stages.push(Stage::default());
+                stages.len() - 1
+            }
+        }
+    };
+
+    // Add data to stage.
+    let stage = &mut stages[stage];
+    reads.iter().for_each(|read| {
+        stage.reads.insert(read.clone());
+    });
+    writes.iter().for_each(|write| {
+        stage.writes.insert(write.clone());
+    });
+    if let Some(name) = name {
+        stage.system_names.insert(String::from(name));
+    }
+    stage.systems.push(element);
+    stage.system_reads.push(reads.into_iter().collect());
+    stage.system_writes.push(writes.into_iter().collect());
+}
+
+#[derive(Derivative)]
+#[derivative(Default(bound = ""))]
+struct Stage<T> {
+    reads: HashSet<ResourceId>,
+    writes: HashSet<ResourceId>,
+    #[derivative(Default(value = "vec![]"))]
+    systems: Vec<T>,
     system_reads: Vec<Vec<ResourceId>>,
     system_writes: Vec<Vec<ResourceId>>,
     system_names: HashSet<String>,
