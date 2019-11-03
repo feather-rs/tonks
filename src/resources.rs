@@ -33,7 +33,11 @@ pub trait Resource: Send + Sync + mopa::Any + 'static {}
 
 impl<T: Send + Sync + mopa::Any> Resource for T {}
 
-mopafy!(Resource);
+#[allow(clippy::transmute_ptr_to_ref)] // https://github.com/chris-morgan/mopa/issues/11
+mod mopafy {
+    use super::*;
+    mopafy!(Resource);
+}
 
 /// Stores resources. Resource borrow access is unchecked,
 /// so most functions are unsafe.
@@ -83,6 +87,7 @@ impl Resources {
     ///
     /// In addition, the type of the resource being requested must match
     /// the ID. (This is checked in debug mode.)
+    #[allow(clippy::mut_from_ref)] // Function is unsafe: users are responsible for this.
     pub unsafe fn get_mut<T: Resource>(&self, id: ResourceId) -> &mut T {
         debug_assert_eq!(resource_id_for::<T>(), id);
 

@@ -8,8 +8,12 @@ use thread_local::ThreadLocal;
 
 mod builder;
 
-use crate::{resources::RESOURCE_ID_MAPPINGS, RawSystem, ResourceId, Resources, SystemId};
+use crate::{
+    resources::RESOURCE_ID_MAPPINGS, system::SYSTEM_ID_MAPPINGS, RawSystem, ResourceId, Resources,
+    SystemId,
+};
 pub use builder::SchedulerBuilder;
+use std::iter;
 
 /// Context of a running system, used for internal purposes.
 #[derive(Clone)]
@@ -128,7 +132,7 @@ pub struct Scheduler {
     ///
     /// This vector is indexed by the `SystemId`.
     #[derivative(Debug = "ignore")]
-    systems: Vec<Box<DynSystem>>,
+    systems: Vec<Option<Box<DynSystem>>>,
     /// Vector containing the systems for each stage.
     stages: Vec<Stage>,
 
@@ -174,11 +178,16 @@ impl Scheduler {
     ) -> Self {
         // Detect resources used by systems and create those vectors.
         // Also collect systems into uniform vector.
-        let mut system_reads: Vec<ResourceVec> = vec![];
-        let mut system_writes: Vec<ResourceVec> = vec![];
+        let num_systems = SYSTEM_ID_MAPPINGS.lock().len();
+        let mut system_reads: Vec<ResourceVec> = iter::repeat_with(|| smallvec![])
+            .take(num_systems)
+            .collect();
+        let mut system_writes: Vec<ResourceVec> = iter::repeat_with(|| smallvec![])
+            .take(num_systems)
+            .collect();
         let mut stage_reads: Vec<ResourceVec> = vec![];
         let mut stage_writes: Vec<ResourceVec> = vec![];
-        let mut systems = vec![];
+        let mut systems: Vec<_> = iter::repeat_with(|| None).take(num_systems).collect();
         let mut stage_systems = vec![];
 
         let mut counter = 0;
@@ -188,12 +197,13 @@ impl Scheduler {
             let mut systems_in_stage = smallvec![];
 
             for system in stage {
-                system_reads.push(read_deps[counter].iter().copied().collect());
-                system_writes.push(write_deps[counter].iter().copied().collect());
+                let id = system.id();
+                system_reads[id.0] = read_deps[counter].iter().copied().collect();
+                system_writes[id.0] = write_deps[counter].iter().copied().collect();
                 stage_read.extend(system_reads[counter].clone());
                 stage_write.extend(system_writes[counter].clone());
-                systems.push(system.into());
-                systems_in_stage.push(SystemId(counter));
+                systems[id.0] = Some(system);
+                systems_in_stage.push(id);
                 counter += 1;
             }
 
@@ -249,7 +259,6 @@ impl Scheduler {
     /// Executes all systems and handles events.
     pub fn execute(&mut self) {
         // Reset the task queue to the starting queue.
-        assert!(self.task_queue.is_empty());
         self.task_queue.extend(self.starting_queue.iter().copied());
 
         // While there are remaining tasks, dispatch them.
@@ -271,6 +280,9 @@ impl Scheduler {
                 self.run_task(task);
             }
         }
+
+        assert!(self.task_queue.is_empty());
+        assert!(self.running_systems.is_empty());
     }
 
     fn run_task(&mut self, task: Task) {
@@ -375,7 +387,7 @@ impl Scheduler {
         let stage = SharedRawPtr(&self.stages[id.0] as *const Stage);
         let resources = SharedRawPtr(&self.resources as *const Resources);
 
-        let systems = SharedMutRawPtr(&mut self.systems as *mut Vec<Box<DynSystem>>);
+        let systems = SharedMutRawPtr(&mut self.systems as *mut Vec<Option<Box<DynSystem>>>);
 
         let sender = self.sender.clone();
 
@@ -383,7 +395,7 @@ impl Scheduler {
             unsafe {
                 (&*stage.0)
                     .par_iter()
-                    .map(|sys_id| &mut (&mut *systems.0)[sys_id.0])
+                    .map(|sys_id| (&mut *systems.0)[sys_id.0].as_mut().unwrap())
                     .for_each(|sys| sys.execute_raw(&*(resources.0)));
             }
 
@@ -394,7 +406,10 @@ impl Scheduler {
 
     fn dispatch_system(&mut self, id: SystemId) {
         let resources = SharedRawPtr(&self.resources as *const Resources);
-        let system = SharedMutRawPtr(&mut *self.systems[id.0] as *mut DynSystem);
+        let system = {
+            let sys = self.systems[id.0].as_mut().unwrap();
+            SharedMutRawPtr(sys.as_mut() as *mut dyn RawSystem)
+        };
 
         let sender = self.sender.clone();
         rayon::spawn(move || {

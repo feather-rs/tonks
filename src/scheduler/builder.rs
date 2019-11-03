@@ -98,11 +98,11 @@ impl Stage {
         system
             .resource_reads()
             .iter()
-            .all(|resource| !self.writes.contains(resource))
+            .any(|resource| self.writes.contains(resource))
             && system
                 .resource_writes()
                 .iter()
-                .all(|resource| !self.reads.contains(resource) && !self.writes.contains(resource))
+                .any(|resource| self.reads.contains(resource) || self.writes.contains(resource))
     }
 
     /// Adds a system to this stage.
