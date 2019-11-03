@@ -44,8 +44,13 @@ where
         }
     }
 
+    pub fn alloc(&mut self) -> V {
+        self.counter += 1;
+        (self.counter - 1).into()
+    }
+
     pub fn len(&self) -> usize {
-        self.mappings.len()
+        self.counter
     }
 }
 

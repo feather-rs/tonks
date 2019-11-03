@@ -70,7 +70,7 @@ pub struct CachedSystem<S: System> {
 impl<S: System + 'static> CachedSystem<S> {
     pub fn new(inner: S) -> Self {
         Self {
-            id: system_id_for::<S>(),
+            id: SYSTEM_ID_MAPPINGS.lock().alloc(),
             resource_reads: S::SystemData::reads(),
             resource_writes: S::SystemData::writes(),
             data: None,
@@ -111,6 +111,20 @@ pub trait SystemData: Send + Sync {
     /// # Safety
     /// Only resources returned by `reads()` and `writes()` may be accessed.
     unsafe fn load_from_resources(resources: &Resources) -> Self;
+}
+
+impl SystemData for () {
+    fn reads() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    unsafe fn load_from_resources(_resources: &Resources) -> Self {
+        ()
+    }
 }
 
 /// Specifies a read requirement for a resource.

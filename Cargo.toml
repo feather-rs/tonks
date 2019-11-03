@@ -22,3 +22,11 @@ mopa = "0.2"
 [dev-dependencies]
 static_assertions = "1.0"
 criterion = "0.3"
+
+# For comparison in performance
+shred = "0.9.3"
+specs = "0.15.1"
+
+[[bench]]
+name = "basic"
+harness = false
