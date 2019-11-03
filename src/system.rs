@@ -122,9 +122,7 @@ impl SystemData for () {
         vec![]
     }
 
-    unsafe fn load_from_resources(_resources: &Resources) -> Self {
-        ()
-    }
+    unsafe fn load_from_resources(_resources: &Resources) -> Self {}
 }
 
 /// Specifies a read requirement for a resource.

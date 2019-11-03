@@ -36,16 +36,17 @@ impl SchedulerBuilder {
                 .all(|resource| !system.resource_writes().contains(resource)),
             "system cannot read and write same resource"
         );
+        let valid_mutable = system.resource_writes().iter().all(|resource| {
+            !system.resource_reads().contains(resource)
+                && system
+                    .resource_writes()
+                    .iter()
+                    .filter(|res| *res == resource)
+                    .count()
+                    == 1
+        });
         assert!(
-            system.resource_writes().iter().all(|resource| {
-                !system.resource_reads().contains(resource)
-                    && system
-                        .resource_writes()
-                        .iter()
-                        .filter(|res| *res == resource)
-                        .count()
-                        == 1
-            }),
+            valid_mutable,
             "system cannot have double mutable access to the same resource"
         );
 

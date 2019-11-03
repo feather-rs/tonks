@@ -18,9 +18,9 @@ derivative = "1.0"
 lazy_static = "1.4"
 parking_lot = "0.9"
 mopa = "0.2"
+static_assertions = "1.0"
 
 [dev-dependencies]
-static_assertions = "1.0"
 criterion = "0.3"
 
 # For comparison in performance
