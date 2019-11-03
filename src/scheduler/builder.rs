@@ -26,6 +26,29 @@ impl SchedulerBuilder {
     /// Adds a system to the stage pipeline.
     pub fn add<S: System + 'static>(&mut self, system: S) {
         let system = CachedSystem::new(system);
+
+        // Verify that there are no conflicts in the system's own resource access.
+        // This prevents UB such as mutable aliasing.
+        assert!(
+            system
+                .resource_reads()
+                .iter()
+                .all(|resource| !system.resource_writes().contains(resource)),
+            "system cannot read and write same resource"
+        );
+        assert!(
+            system.resource_writes().iter().all(|resource| {
+                !system.resource_reads().contains(resource)
+                    && system
+                        .resource_writes()
+                        .iter()
+                        .filter(|res| *res == resource)
+                        .count()
+                        == 1
+            }),
+            "system cannot have double mutable access to the same resource"
+        );
+
         if let Some(stage) = self
             .stages
             .iter_mut()
