@@ -5,24 +5,23 @@ authors = ["caelunshun <caelunshun@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-shred = "0.9.3"
-specs = "0.15.1"
-crossbeam = "0.7.2"
-hashbrown = "0.6.0"
-rayon = "1.2.0"
-smallvec = "0.6.10"
-arrayvec = "0.5.0"
-bumpalo = "2.6.0"
-thread_local = "1.0.0"
-bit-set = "0.5.1"
-derivative = "1.0.3"
-
-[features]
-nightly = ["shred/nightly", "specs/nightly"]
+# legion = { git = "https://github.com/jaynus/legion", branch = "systems", rev = "f8ef758364c7d203a696fc292c9f0fba9f86c10a" }
+crossbeam = "0.7"
+hashbrown = "0.6"
+rayon = "1.2"
+smallvec = "0.6"
+arrayvec = "0.5"
+bumpalo = "2.6"
+thread_local = "1.0"
+bit-set = "0.5"
+derivative = "1.0"
+lazy_static = "1.4"
+parking_lot = "0.9"
+mopa = "0.2"
 
 [dev-dependencies]
-static_assertions = "1.0.0"
-criterion = "0.3.0"
+static_assertions = "1.0"
+criterion = "0.3"
 
 [[bench]]
 name = "basic"

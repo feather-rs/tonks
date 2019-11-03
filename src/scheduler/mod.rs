@@ -1,25 +1,15 @@
-use crate::EnumExecutionStrategy;
 use bit_set::BitSet;
 use bumpalo::Bump;
 use crossbeam::{Receiver, Sender};
-use hashbrown::HashMap;
 use rayon::prelude::*;
-use shred::{ResourceId, World};
-use smallvec::smallvec;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 use std::collections::VecDeque;
-use std::mem;
-use std::sync::Arc;
 use thread_local::ThreadLocal;
 
 mod builder;
-mod oneshot;
-mod run_now;
 
-pub use builder::SchedulerBuilder;
-pub use oneshot::{Oneshot, OneshotTuple};
-use run_now::RunNow;
-use std::any::TypeId;
+use crate::{RawSystem, ResourceId, Resources, SystemId};
+pub use builder::StageBuilder;
 
 /// Context of a running system, used for internal purposes.
 #[derive(Clone)]
@@ -30,28 +20,15 @@ pub struct Context {
     pub(crate) sender: Sender<TaskMessage>,
 }
 
-/// Internal ID used to identify resources.
-/// These are allocated consecutively so that
-/// they can be used as indices into vectors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct InternalResourceId(usize);
-/// Internal ID used to identify systems.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct SystemId(usize);
-/// Internal ID used to identify stages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct StageId(usize);
-/// Internal ID used to identify event types.
-/// These are allocated consecutively so that
-/// they can be used as indices into vectors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct EventId(usize);
+/// ID of a stage, allocated consecutively for use as indices into vectors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct StageId(usize);
 
 /// A stage in the completion of a dispatch. Each stage
 /// contains systems which can be executed in parallel.
 type Stage = SmallVec<[SystemId; 6]>;
 
-type ResourceVec = SmallVec<[InternalResourceId; 8]>;
+type ResourceVec = SmallVec<[ResourceId; 8]>;
 
 /// A raw pointer to some `T`.
 ///
@@ -60,14 +37,13 @@ type ResourceVec = SmallVec<[InternalResourceId; 8]>;
 /// up to the user to ensure that:
 /// * If the pointer is dereferenced, the value has not been dropped.
 /// * No data races occur.
-struct SharedRawPtr<T>(*const T);
+struct SharedRawPtr<T: ?Sized>(*const T);
 
-unsafe impl<T: Send> Send for SharedRawPtr<T> {}
-unsafe impl<T: Sync> Sync for SharedRawPtr<T> {}
+unsafe impl<T: ?Sized + Send> Send for SharedRawPtr<T> {}
+unsafe impl<T: ?Sized + Sync> Sync for SharedRawPtr<T> {}
 
-type DynSystem<'a> = (dyn RunNow<'a> + 'static);
+type DynSystem = (dyn RawSystem + 'static);
 
-/*
 /// A mutable raw pointer to some `T`.
 ///
 /// # Safety
@@ -75,11 +51,10 @@ type DynSystem<'a> = (dyn RunNow<'a> + 'static);
 /// up to the user to ensure that:
 /// * If the pointer is dereferenced, the value has not been dropped.
 /// * No data races occur.
-struct SharedMutRawPtr<T>(*mut T);
+struct SharedMutRawPtr<T: ?Sized>(*mut T);
 
-unsafe impl<T: Send> Send for SharedMutRawPtr<T> {}
-unsafe impl<T: Sync> Sync for SharedMutRawPtr<T> {}
-*/
+unsafe impl<T: ?Sized + Send> Send for SharedMutRawPtr<T> {}
+unsafe impl<T: ?Sized + Sync> Sync for SharedMutRawPtr<T> {}
 
 /// A message sent from a running task to the scheduler.
 #[allow(dead_code)]
@@ -97,21 +72,12 @@ pub(crate) enum TaskMessage {
     SystemComplete(SystemId),
     /// Indicates that all systems in a stage have completed.
     StageComplete(StageId),
-    /// Requests that a one-shot system be run with the given
-    /// `EnumExecutionStrategy`. The scheduler will run the
-    /// system as requested.
-    ///
-    /// The ID of the currently running system must be provided.
-    ScheduleOneshot {
-        scheduling_system: SystemId,
-        system: Box<DynSystem<'static>>,
-        strategy: EnumExecutionStrategy,
-    },
 }
 
 /// A task to run. This can either be a stage (mutliple systems run in parallel),
 /// a oneshot system, or an event handling pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 enum Task {
     Stage(StageId),
     Oneshot(SystemId),
@@ -123,6 +89,10 @@ enum Task {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Scheduler {
+    /// Resources held by this scheduler.
+    #[derivative(Debug = "ignore")]
+    resources: Resources,
+
     /// Queue of tasks to run during the current dispatch.
     ///
     /// Each dispatch, this queue is reset to `starting_queue`.
@@ -130,23 +100,15 @@ pub struct Scheduler {
     /// The starting task queue for any dispatch.
     starting_queue: VecDeque<Task>,
 
-    /// Number of currently running systems.
-    runnning_systems: usize,
-
     /// Bit set representing write resources which are currently held.
     ///
-    /// This set is indexed by the `InternalResourceId`.
+    /// This set is indexed by the `ResourceId`.
     writes_held: BitSet,
     /// Vector of reference counts representing the number of tasks currently
     /// holding a shared reference to a resource.
     ///
-    /// This vector is indexed by the `InternalResourceId`.
+    /// This vector is indexed by the `ResourceId`.
     reads_held: Vec<u8>,
-
-    /// Mapping from `shred::ResourceId` to `InternalResourceId`.
-    resource_id_mappings: HashMap<ResourceId, InternalResourceId>,
-    /// Mapping from `TypeId` of events to `EventId`.
-    event_id_mappings: HashMap<TypeId, EventId>,
 
     /// Thread-local bump allocator used to allocate events.
     ///
@@ -154,12 +116,19 @@ pub struct Scheduler {
     #[derivative(Debug = "ignore")]
     bump: ThreadLocal<Bump>,
 
+    /// Number of currently running systems.
+    runnning_systems_count: usize,
+    /// Bit set containing bits set for systems which are currently running.
+    ///
+    /// This is indexed by the `SystemId`.
+    running_systems: BitSet,
+
     /// Vector of systems which can be executed. This includes oneshottable
     /// systems as well.
     ///
     /// This vector is indexed by the `SystemId`.
     #[derivative(Debug = "ignore")]
-    systems: Vec<Arc<DynSystem<'static>>>,
+    systems: Vec<Box<DynSystem>>,
     /// Vector containing the systems for each stage.
     stages: Vec<Stage>,
 
@@ -180,15 +149,6 @@ pub struct Scheduler {
     /// This vector is indexed by the `StageId`.
     stage_writes: Vec<ResourceVec>,
 
-    /// Original system count when this scheduler was initialized.
-    ///
-    /// Since "temporary" systems can be added during dispatch (e.g.
-    /// one-shots), we use this value to remove those.
-    original_system_count: usize,
-    /// Counter used to allocate temporary system IDs. This is reset
-    /// to `original_system_count` at the start of dispatch.
-    temp_system_id_counter: usize,
-
     /// Receiving end of the channel used to communicate with running systems.
     #[derivative(Debug = "ignore")]
     receiver: Receiver<TaskMessage>,
@@ -206,26 +166,12 @@ impl Scheduler {
     /// # Contract
     /// The stages are assumed to have been assembled correctly:
     /// no two systems in a stage may conflict with each other.
-    fn new<'a>(
-        stages: Vec<Vec<Box<(dyn RunNow<'a> + 'static)>>>,
+    pub fn new(
+        stages: Vec<Vec<Box<DynSystem>>>,
         read_deps: Vec<Vec<ResourceId>>,
         write_deps: Vec<Vec<ResourceId>>,
+        resources: Resources,
     ) -> Self {
-        // Assign numerical IDs to resources.
-        let mut resource_id_mappings = HashMap::new();
-        let mut counter = 0;
-        for dep in read_deps
-            .iter()
-            .flatten()
-            .chain(write_deps.iter().flatten())
-        {
-            resource_id_mappings.entry(dep.clone()).or_insert_with(|| {
-                let r = counter;
-                counter += 1;
-                InternalResourceId(r)
-            });
-        }
-
         // Detect resources used by systems and create those vectors.
         // Also collect systems into uniform vector.
         let mut system_reads: Vec<ResourceVec> = vec![];
@@ -235,27 +181,15 @@ impl Scheduler {
         let mut systems = vec![];
         let mut stage_systems = vec![];
 
-        counter = 0;
+        let mut counter = 0;
         for stage in stages {
             let mut stage_read = vec![];
             let mut stage_write = vec![];
             let mut systems_in_stage = smallvec![];
 
             for system in stage {
-                system_reads.push(
-                    read_deps[counter]
-                        .clone()
-                        .into_iter()
-                        .map(|id| resource_id_mappings[&id])
-                        .collect(),
-                );
-                system_writes.push(
-                    write_deps[counter]
-                        .clone()
-                        .into_iter()
-                        .map(|id| resource_id_mappings[&id])
-                        .collect(),
-                );
+                system_reads.push(read_deps[counter].iter().copied().collect());
+                system_writes.push(write_deps[counter].iter().copied().collect());
                 stage_read.extend(system_reads[counter].clone());
                 stage_write.extend(system_writes[counter].clone());
                 systems.push(system.into());
@@ -268,37 +202,26 @@ impl Scheduler {
             stage_systems.push(systems_in_stage);
         }
 
-        // We use a bounded channel of capacity 1 because the only overhead
+        // We use a bounded channel because the only overhead
         // is typically on the sender's side—the receiver, the scheduler, should
         // plow through messages. This may be changed in the future.
-        let (sender, receiver) = crossbeam::bounded(1);
+        let (sender, receiver) = crossbeam::bounded(8);
 
         let bump = ThreadLocal::new();
 
         let starting_queue = Self::create_task_queue(&stage_systems);
 
-        let original_system_count = systems.len();
-
-        // `RunNow` has a lifetime parameter 'a, but
-        // it is only used to ensure that the `SystemData`
-        // outlives the `World`.
-        // Because the `World` will remain valid while the system
-        // is running (`execute()` does not return until all systems
-        // complete), we can safely cast `RunNow<'a>` to `RunNow<'static>`.
-        let systems = unsafe {
-            systems
-                .into_iter()
-                .map(|sys| mem::transmute::<Arc<DynSystem<'a>>, Arc<DynSystem<'static>>>(sys))
-                .collect()
-        };
         Self {
+            resources,
+
             starting_queue,
             task_queue: VecDeque::new(), // Replaced in `execute()`
 
-            writes_held: BitSet::with_capacity(resource_id_mappings.len()),
-            reads_held: vec![0; resource_id_mappings.len()],
+            writes_held: BitSet::new(),
+            reads_held: vec![],
 
-            runnning_systems: 0,
+            runnning_systems_count: 0,
+            running_systems: BitSet::with_capacity(systems.len()),
 
             systems,
             stages: stage_systems,
@@ -310,13 +233,8 @@ impl Scheduler {
 
             bump,
 
-            original_system_count,
-            temp_system_id_counter: original_system_count,
-
             sender,
             receiver,
-            resource_id_mappings,
-            event_id_mappings: HashMap::new(),
         }
     }
 
@@ -329,9 +247,10 @@ impl Scheduler {
     }
 
     /// Executes all systems and handles events.
-    pub fn execute(&mut self, world: &World) {
+    pub fn execute(&mut self) {
         // Reset the task queue to the starting queue.
-        self.task_queue = self.starting_queue.clone();
+        assert!(self.task_queue.is_empty());
+        self.task_queue.extend(self.starting_queue.iter().copied());
 
         // While there are remaining tasks, dispatch them.
         // When we encounter a task which can't be run because
@@ -339,33 +258,30 @@ impl Scheduler {
         // complete by listening on the channel.
         while let Some(task) = self.task_queue.pop_front() {
             // Attempt to run task.
-            self.run_task(world, task);
+            self.run_task(task);
         }
 
         // Wait for remaining systems to complete.
-        while self.runnning_systems > 0 {
+        while self.runnning_systems_count > 0 {
             let num = self.wait_for_completion();
-            self.runnning_systems -= num;
+            self.runnning_systems_count -= num;
 
             // Run any handlers/oneshots scheduled by these systems
             while let Some(task) = self.task_queue.pop_front() {
-                self.run_task(world, task);
+                self.run_task(task);
             }
         }
-
-        // Clean up.
-        self.reset_temp_systems();
     }
 
-    fn run_task(&mut self, world: &World, task: Task) {
+    fn run_task(&mut self, task: Task) {
         let reads = reads_for_task(&self.stage_reads, &self.system_reads, &task);
         let writes = writes_for_task(&self.stage_writes, &self.system_writes, &task);
 
         match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held) {
             Ok(()) => {
                 // Run task and proceed.
-                let systems = self.dispatch_task(task, world);
-                self.runnning_systems += systems;
+                let systems = self.dispatch_task(task);
+                self.runnning_systems_count += systems;
             }
             Err(()) => {
                 // Execution is blocked: wait for tasks to finish.
@@ -373,20 +289,9 @@ impl Scheduler {
                 // TODO: optimize this
                 self.task_queue.push_front(task);
                 let num = self.wait_for_completion();
-                self.runnning_systems -= num;
+                self.runnning_systems_count -= num;
             }
         }
-    }
-
-    /// Removes any temporary systems which were allocated during dispatch.
-    fn reset_temp_systems(&mut self) {
-        self.system_reads
-            .resize_with(self.original_system_count, || unreachable!());
-        self.system_writes
-            .resize_with(self.original_system_count, || unreachable!());
-        self.systems
-            .resize_with(self.original_system_count, || unreachable!());
-        self.temp_system_id_counter = self.original_system_count;
     }
 
     /// Waits for messages from running systems and handles them.
@@ -403,25 +308,16 @@ impl Scheduler {
             // TODO: events
             TaskMessage::SystemComplete(id) => {
                 self.release_resources_for_system(id);
+                self.running_systems.remove(id.0);
                 1
             }
             TaskMessage::StageComplete(id) => {
                 self.release_resources_for_stage(id);
+                let running_systems = &mut self.running_systems;
+                self.stages[id.0].iter().for_each(|id| {
+                    running_systems.remove(id.0);
+                });
                 self.stages[id.0].len()
-            }
-            TaskMessage::ScheduleOneshot {
-                system, strategy, ..
-            } => {
-                match strategy {
-                    EnumExecutionStrategy::Relaxed => {
-                        // Push system to back of task queue and indicate that no
-                        // systems completed.
-                        let id = self.create_temp_system(system);
-                        self.task_queue.push_back(Task::Oneshot(id));
-                        0
-                    }
-                    _ => unimplemented!(),
-                }
             }
         }
     }
@@ -449,52 +345,37 @@ impl Scheduler {
         }
     }
 
-    fn create_temp_system(&mut self, system: Box<DynSystem<'static>>) -> SystemId {
-        let id = SystemId(self.temp_system_id_counter);
-        self.temp_system_id_counter += 1;
-
-        self.system_reads.push(
-            system
-                .reads()
-                .into_iter()
-                .map(|res| self.resource_id_mappings[&res])
-                .collect(),
-        );
-        self.system_writes.push(
-            system
-                .writes()
-                .into_iter()
-                .map(|res| self.resource_id_mappings[&res])
-                .collect(),
-        );
-        self.systems.push(system.into());
-        debug_assert_eq!(self.system_writes.len(), self.temp_system_id_counter);
-
-        id
-    }
-
     /// Dispatches a task, returning the number of systems spawned.
-    fn dispatch_task(&self, task: Task, world: &World) -> usize {
+    fn dispatch_task(&mut self, task: Task) -> usize {
         match task {
             Task::Stage(id) => {
-                self.dispatch_stage(id, world);
+                let running_systems = &mut self.running_systems;
+                self.stages[id.0].iter().for_each(|id| {
+                    running_systems.insert(id.0);
+                });
+                self.dispatch_stage(id);
                 self.stages[id.0].len()
             }
             Task::Oneshot(id) => {
-                self.dispatch_system(id, world);
+                self.running_systems.insert(id.0);
+                self.dispatch_system(id);
                 1
             }
         }
     }
 
-    fn dispatch_stage(&self, id: StageId, world: &World) {
+    fn dispatch_stage(&mut self, id: StageId) {
         // Rather than spawning each system independently, we optimize
         // this by running them in batch. This reduces synchronization overhead
         // with the scheduler using channels.
-        let stage = SharedRawPtr(&self.stages[id.0] as *const Stage);
-        let world = SharedRawPtr(world as *const World);
 
-        let systems = SharedRawPtr(&self.systems as *const Vec<Arc<DynSystem<'static>>>);
+        // Safety of these raw pointers: they remain valid as long as the scheduler
+        // is still in `execute()`, and `execute()` will not return until all systems
+        // have completed.
+        let stage = SharedRawPtr(&self.stages[id.0] as *const Stage);
+        let resources = SharedRawPtr(&self.resources as *const Resources);
+
+        let systems = SharedMutRawPtr(&mut self.systems as *mut Vec<Box<DynSystem>>);
 
         let sender = self.sender.clone();
 
@@ -502,14 +383,8 @@ impl Scheduler {
             unsafe {
                 (&*stage.0)
                     .par_iter()
-                    .map(|sys_id| (sys_id, &(&*systems.0)[sys_id.0]))
-                    .for_each(|(id, sys)| {
-                        let ctx = Context {
-                            sender: sender.clone(),
-                            id: *id,
-                        };
-                        sys.run_now(&*(world.0), ctx)
-                    });
+                    .map(|sys_id| &mut (&mut *systems.0)[sys_id.0])
+                    .for_each(|sys| sys.execute_raw(&*(resources.0)));
             }
 
             // TODO: events, oneshot
@@ -517,25 +392,17 @@ impl Scheduler {
         });
     }
 
-    fn dispatch_system(&self, id: SystemId, world: &World) {
-        self.dispatch_raw_system(id, &self.systems[id.0], world);
-    }
-
-    fn dispatch_raw_system(&self, id: SystemId, system: &Arc<DynSystem<'static>>, world: &World) {
-        let world = SharedRawPtr(world as *const World);
-        let sys = Arc::clone(system);
+    fn dispatch_system(&mut self, id: SystemId) {
+        let resources = SharedRawPtr(&self.resources as *const Resources);
+        let system = SharedMutRawPtr(&mut *self.systems[id.0] as *mut DynSystem);
 
         let sender = self.sender.clone();
         rayon::spawn(move || {
-            let ctx = Context {
-                sender: sender.clone(),
-                id,
-            };
             unsafe {
                 // Safety: the world is not dropped while the system
                 // executes, since `execute` will not return until
                 // all systems have completed.
-                sys.run_now(&*(world.0), ctx);
+                (&mut *system.0).execute_raw(&*(resources.0));
             }
 
             // TODO: events
