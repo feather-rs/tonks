@@ -99,7 +99,7 @@ impl Stage {
             .resource_reads()
             .iter()
             .any(|resource| self.writes.contains(resource))
-            && system
+            || system
                 .resource_writes()
                 .iter()
                 .any(|resource| self.reads.contains(resource) || self.writes.contains(resource))
