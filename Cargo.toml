@@ -22,11 +22,3 @@ mopa = "0.2"
 [dev-dependencies]
 static_assertions = "1.0"
 criterion = "0.3"
-
-[[bench]]
-name = "basic"
-harness = false
-
-[[bench]]
-name = "oneshot"
-harness = false

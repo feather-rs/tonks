@@ -1,55 +1,31 @@
 //! Building of stage pipelines, which are used to organize system
 //! execution order while ensuring resource borrow safety.
 
-use crate::{RawSystem, ResourceId};
+use crate::{CachedSystem, RawSystem, ResourceId, Resources, Scheduler, System};
 use hashbrown::HashSet;
 
-/// Implemented on types which can be organized into a pipeline of stages.
-pub trait StageBuildable {
-    fn reads(&self) -> &[ResourceId];
-    fn writes(&self) -> &[ResourceId];
-}
-
-impl<S> StageBuildable for S
-where
-    S: RawSystem,
-{
-    fn reads(&self) -> &[ResourceId] {
-        self.resource_reads()
-    }
-
-    fn writes(&self) -> &[ResourceId] {
-        self.resource_writes()
-    }
-}
-
 /// Builder of a stage pipeline.
-pub struct StageBuilder<S: StageBuildable> {
-    /// Stages which have been created so far. New `StageBuildable`s can
+pub struct SchedulerBuilder {
+    /// Stages which have been created so far. New systems can
     /// be inserted into existing stages or be added in a new stage.
-    stages: Vec<Stage<S>>,
+    stages: Vec<Stage>,
 }
 
-impl<S> Default for StageBuilder<S>
-where
-    S: StageBuildable,
-{
+impl Default for SchedulerBuilder {
     fn default() -> Self {
         Self { stages: vec![] }
     }
 }
 
-impl<S> StageBuilder<S>
-where
-    S: StageBuildable,
-{
+impl SchedulerBuilder {
     /// Creates a new `StageBuilder` with no systems.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Adds a system to the stage pipeline.
-    pub fn add(&mut self, system: S) {
+    pub fn add<S: System + 'static>(&mut self, system: S) {
+        let system = CachedSystem::new(system);
         if let Some(stage) = self
             .stages
             .iter_mut()
@@ -66,26 +42,42 @@ where
 
     /// Adds a system to the stage pipeline, returning
     /// the `StageBuilder` for method chaining.
-    pub fn with(mut self, system: S) -> Self {
+    pub fn with<S: System + 'static>(mut self, system: S) -> Self {
         self.add(system);
         self
+    }
+
+    /// Creates a new `Scheduler` based on the stage pipeline
+    /// which was built.
+    pub fn build(self, resources: Resources) -> Scheduler {
+        let mut systems = vec![];
+        let mut reads = vec![];
+        let mut writes = vec![];
+
+        for stage in self.stages {
+            for system in &stage.systems {
+                reads.push(system.resource_reads().to_vec());
+                writes.push(system.resource_writes().to_vec());
+            }
+
+            systems.push(stage.systems);
+        }
+
+        Scheduler::new(systems, reads, writes, resources)
     }
 }
 
 /// A stage of a stage builder.
-struct Stage<S: StageBuildable> {
+struct Stage {
     /// Vector of items in this stage.
-    systems: Vec<S>,
+    systems: Vec<Box<dyn RawSystem>>,
     /// Set of resources which are read by this stage.
     reads: HashSet<ResourceId>,
     /// Set of resources which are written by this stage.
     writes: HashSet<ResourceId>,
 }
 
-impl<S> Default for Stage<S>
-where
-    S: StageBuildable,
-{
+impl Default for Stage {
     fn default() -> Self {
         Self {
             systems: vec![],
@@ -95,35 +87,32 @@ where
     }
 }
 
-impl<S> Stage<S>
-where
-    S: StageBuildable,
-{
+impl Stage {
     /// Creates a new, empty stage.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Returns whether the given system conflicts with this stage.
-    pub fn conflicts_with(&self, system: &S) -> bool {
+    pub fn conflicts_with<S: RawSystem>(&self, system: &S) -> bool {
         system
-            .reads()
+            .resource_reads()
             .iter()
             .all(|resource| !self.writes.contains(resource))
             && system
-                .writes()
+                .resource_writes()
                 .iter()
                 .all(|resource| !self.reads.contains(resource) && !self.writes.contains(resource))
     }
 
     /// Adds a system to this stage.
-    pub fn add(&mut self, system: S) {
-        system.reads().iter().for_each(|resource| {
+    pub fn add<S: RawSystem + 'static>(&mut self, system: S) {
+        system.resource_reads().iter().for_each(|resource| {
             self.reads.insert(*resource);
         });
-        system.writes().iter().for_each(|resource| {
+        system.resource_writes().iter().for_each(|resource| {
             self.writes.insert(*resource);
         });
-        self.systems.push(system);
+        self.systems.push(Box::new(system));
     }
 }

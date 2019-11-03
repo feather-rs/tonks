@@ -8,8 +8,8 @@ use thread_local::ThreadLocal;
 
 mod builder;
 
-use crate::{RawSystem, ResourceId, Resources, SystemId};
-pub use builder::StageBuilder;
+use crate::{resources::RESOURCE_ID_MAPPINGS, RawSystem, ResourceId, Resources, SystemId};
+pub use builder::SchedulerBuilder;
 
 /// Context of a running system, used for internal purposes.
 #[derive(Clone)]
@@ -218,7 +218,7 @@ impl Scheduler {
             task_queue: VecDeque::new(), // Replaced in `execute()`
 
             writes_held: BitSet::new(),
-            reads_held: vec![],
+            reads_held: vec![0; RESOURCE_ID_MAPPINGS.lock().len()],
 
             runnning_systems_count: 0,
             running_systems: BitSet::with_capacity(systems.len()),
