@@ -33,6 +33,31 @@ pub trait Event: Send + Sync + 'static {}
 
 impl<T> Event for T where T: Send + Sync + 'static {}
 
+/// Strategy used to handle an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HandleStrategy {
+    /// The handler will be invoked in the call to `trigger` so that
+    /// the system triggering it will observe any side effects from
+    /// handling the event.
+    ///
+    /// This is the default strategy.
+    Immediate,
+    /// The handler will be scheduled for running as soon as possible.
+    ///
+    /// In general, use of this strategy should be avoided, since it is
+    /// inefficient. Only use this if you need the event to be handled as
+    /// soon as possible without using `Immediate`.
+    Soon,
+    /// The handle will be scheduled for running at the end of tick.
+    EndOfTick,
+}
+
+impl Default for HandleStrategy {
+    fn default() -> Self {
+        HandleStrategy::Immediate
+    }
+}
+
 /// A raw event handler.
 ///
 /// # Safety
@@ -45,6 +70,9 @@ pub unsafe trait RawEventHandler: Send + Sync {
 
     /// Returns the ID of the event which is handled by this handler.
     fn event_id(&self) -> EventId;
+
+    /// Returns the strategy that should be used to invoke this handler.
+    fn strategy(&self) -> HandleStrategy;
 
     /// Returns the resources read by this event handler.
     fn resource_reads(&self) -> &[ResourceId];
@@ -77,6 +105,12 @@ pub trait EventHandler<E: Event>: Send + Sync {
     /// event in the slice.
     fn handle_batch(&self, events: &[E], data: &mut Self::HandlerData) {
         events.iter().for_each(|event| self.handle(event, data));
+    }
+
+    /// Returns the strategy that should be used to invoke this handler.
+    /// The default implementation of this function returns `HandleStrategy::default()`.
+    fn strategy(&self) -> HandleStrategy {
+        HandleStrategy::default()
     }
 }
 
@@ -127,6 +161,10 @@ where
 
     fn event_id(&self) -> EventId {
         self.event_id
+    }
+
+    fn strategy(&self) -> HandleStrategy {
+        self.inner.strategy()
     }
 
     fn resource_reads(&self) -> &[ResourceId] {
