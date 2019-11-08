@@ -9,8 +9,8 @@ use thread_local::ThreadLocal;
 mod builder;
 
 use crate::{
-    resources::RESOURCE_ID_MAPPINGS, system::SYSTEM_ID_MAPPINGS, RawSystem, ResourceId, Resources,
-    SystemId,
+    resources::RESOURCE_ID_MAPPINGS, system::SYSTEM_ID_MAPPINGS, EventId, RawEventHandler,
+    RawSystem, ResourceId, Resources, SystemId,
 };
 pub use builder::SchedulerBuilder;
 use std::iter;
@@ -72,11 +72,25 @@ pub(crate) enum TaskMessage {
     /// is sent to indicate that all systems in a stage completed
     /// at once.
     ///
-    /// This is only used for oneshot systems and event handlers.
+    /// This is only used for oneshot systems.
     SystemComplete(SystemId),
     /// Indicates that all systems in a stage have completed.
     StageComplete(StageId),
+    /// Indicates that an event handler pipeline has finished running.
+    EventHandlingComplete(EventId),
+    /// Requests that one or more events be handled.
+    ///
+    /// `EndOfSystem` handlers should be run after this message is sent.
+    ///
+    /// # Safety
+    /// * The event ID must correspond to the type of event being handled.
+    /// * `ptr` must be a pointer to an array of events of the corresponding
+    /// type, allocated in one of the thread-local bump allocators.
+    TriggerEvents { id: EventId, ptr: *const [()] },
 }
+
+unsafe impl Send for TaskMessage {}
+unsafe impl Sync for TaskMessage {}
 
 /// A task to run. This can either be a stage (mutliple systems run in parallel),
 /// a oneshot system, or an event handling pipeline.
@@ -85,8 +99,15 @@ pub(crate) enum TaskMessage {
 enum Task {
     Stage(StageId),
     Oneshot(SystemId),
+    HandleEvent(EventId, *const [()]),
     // TODO: event pipeline
 }
+
+// Safety: *const [()] is allocated in the bump allocator,
+// which is not reset until execute() returns (and thus all tasks
+// have been consumed.)
+unsafe impl Send for Task {}
+unsafe impl Sync for Task {}
 
 /// The `tonks` scheduler. This is similar to `shred::Dispatcher`
 /// but has more features.
@@ -152,6 +173,31 @@ pub struct Scheduler {
     ///
     /// This vector is indexed by the `StageId`.
     stage_writes: Vec<ResourceVec>,
+
+    // === Event handling ===
+    /// Vector containing event handlers. This vector is indexed by the `SystemID`.
+    ///
+    /// Entries which correspond to normal systems rather than event handlers
+    /// are `None`.
+    #[derivative(Debug = "ignore")]
+    event_handlers: Vec<Box<dyn RawEventHandler>>,
+
+    /// Vector containing the event handler system IDs required for handling
+    /// each given event. All handlers in this vector have `EndOfTick` handle
+    /// strategies; `EndOfSystem` is handled separately.
+    ///
+    /// This vector is indexed by the `EventId`.
+    end_of_tick_handlers: Vec<SmallVec<[SystemId; 4]>>,
+
+    /// Vector containing the reads required for each event handler __pipeline__.
+    ///
+    /// This vector is indexed by the `EventId`.
+    event_reads: Vec<ResourceVec>,
+
+    /// Vector containing the writes required for each event handler __pipeline__.
+    ///
+    /// This vector is indexed by the `EventId`.
+    event_writes: Vec<ResourceVec>,
 
     /// Receiving end of the channel used to communicate with running systems.
     #[derivative(Debug = "ignore")]
@@ -241,10 +287,15 @@ impl Scheduler {
             stage_reads,
             stage_writes,
 
+            event_handlers: vec![],
+            end_of_tick_handlers: vec![],
+
+            event_reads: vec![],
             bump,
 
             sender,
             receiver,
+            event_writes: vec![],
         }
     }
 
@@ -281,13 +332,26 @@ impl Scheduler {
             }
         }
 
+        // Handle `EndOfDispatch` events. Also must account
+        // for these event handlers triggering further events.
+
         assert!(self.task_queue.is_empty());
         assert!(self.running_systems.is_empty());
     }
 
     fn run_task(&mut self, task: Task) {
-        let reads = reads_for_task(&self.stage_reads, &self.system_reads, &task);
-        let writes = writes_for_task(&self.stage_writes, &self.system_writes, &task);
+        let reads = reads_for_task(
+            &self.stage_reads,
+            &self.system_reads,
+            &self.event_reads,
+            &task,
+        );
+        let writes = writes_for_task(
+            &self.stage_writes,
+            &self.system_writes,
+            &self.event_writes,
+            &task,
+        );
 
         match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held) {
             Ok(()) => {
@@ -331,6 +395,14 @@ impl Scheduler {
                 });
                 self.stages[id.0].len()
             }
+            TaskMessage::TriggerEvents { id, ptr } => {
+                self.task_queue.push_back(Task::HandleEvent(id, ptr));
+                0
+            }
+            TaskMessage::EventHandlingComplete(id) => {
+                self.release_resources_for_event_handler(id);
+                self.end_of_tick_handlers[id.0].len()
+            }
         }
     }
 
@@ -357,6 +429,19 @@ impl Scheduler {
         }
     }
 
+    fn release_resources_for_event_handler(&mut self, id: EventId) {
+        let reads = &self.event_reads[id.0];
+        let writes = &self.event_writes[id.0];
+
+        for read in reads {
+            self.reads_held[read.0] -= 1;
+        }
+
+        for write in writes {
+            self.writes_held.remove(write.0);
+        }
+    }
+
     /// Dispatches a task, returning the number of systems spawned.
     fn dispatch_task(&mut self, task: Task) -> usize {
         match task {
@@ -372,6 +457,19 @@ impl Scheduler {
                 self.running_systems.insert(id.0);
                 self.dispatch_system(id);
                 1
+            }
+            Task::HandleEvent(id, ptr) => {
+                let running_systems = &mut self.running_systems;
+                let handlers = &self.end_of_tick_handlers[id.0];
+
+                handlers.iter().for_each(|id| {
+                    running_systems.insert(id.0);
+                });
+
+                self.dispatch_event_handlers(id, ptr);
+
+                let handlers = &self.end_of_tick_handlers[id.0];
+                handlers.len()
             }
         }
     }
@@ -424,6 +522,32 @@ impl Scheduler {
             sender.send(TaskMessage::SystemComplete(id)).unwrap();
         });
     }
+
+    fn dispatch_event_handlers(&mut self, id: EventId, ptr: *const [()]) {
+        let handler_ids =
+            SharedRawPtr(&self.end_of_tick_handlers[id.0] as *const SmallVec<[SystemId; 4]>);
+        let handlers =
+            SharedMutRawPtr(&mut self.event_handlers as *mut Vec<Box<dyn RawEventHandler>>);
+        let resources = SharedRawPtr(&self.resources as *const Resources);
+        let sender = self.sender.clone();
+        let ptr = SharedRawPtr(ptr);
+
+        rayon::spawn(move || {
+            // Safety: see dispatch_system().
+            unsafe {
+                (&*handler_ids.0)
+                    .iter()
+                    .map(|id| &mut (&mut *handlers.0)[id.0])
+                    .for_each(|handler| {
+                        debug_assert_eq!(handler.event_id(), id);
+                        handler.handle_raw_batch(ptr.0, &*resources.0);
+                        sender
+                            .send(TaskMessage::SystemComplete(handler.id()))
+                            .unwrap();
+                    });
+            }
+        });
+    }
 }
 
 /// Attempts to acquire resources for a task, returning `Err` if
@@ -465,22 +589,26 @@ fn try_obtain_resources(
 fn reads_for_task<'a>(
     stage_reads: &'a [ResourceVec],
     system_reads: &'a [ResourceVec],
+    event_reads: &'a [ResourceVec],
     task: &Task,
 ) -> &'a ResourceVec {
     match task {
         Task::Stage(id) => &stage_reads[id.0],
         Task::Oneshot(id) => &system_reads[id.0],
+        Task::HandleEvent(id, _) => &event_reads[id.0],
     }
 }
 
 fn writes_for_task<'a>(
     stage_writes: &'a [ResourceVec],
     system_writes: &'a [ResourceVec],
+    event_writes: &'a [ResourceVec],
     task: &Task,
 ) -> &'a ResourceVec {
     match task {
         Task::Stage(id) => &stage_writes[id.0],
         Task::Oneshot(id) => &system_writes[id.0],
+        Task::HandleEvent(id, _) => &event_writes[id.0],
     }
 }
 

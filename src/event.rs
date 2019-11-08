@@ -36,25 +36,23 @@ impl<T> Event for T where T: Send + Sync + 'static {}
 /// Strategy used to handle an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HandleStrategy {
-    /// The handler will be invoked in the call to `trigger` so that
+    /*/// The handler will be invoked in the call to `trigger` so that
     /// the system triggering it will observe any side effects from
     /// handling the event.
     ///
     /// This is the default strategy.
-    Immediate,
-    /// The handler will be scheduled for running as soon as possible.
+    Immediate,*/
+    /// The handler will be run at the end of the system which triggered the event.
     ///
-    /// In general, use of this strategy should be avoided, since it is
-    /// inefficient. Only use this if you need the event to be handled as
-    /// soon as possible without using `Immediate`.
-    Soon,
+    /// This is the default strategy.
+    EndOfSystem,
     /// The handle will be scheduled for running at the end of tick.
     EndOfTick,
 }
 
 impl Default for HandleStrategy {
     fn default() -> Self {
-        HandleStrategy::Immediate
+        HandleStrategy::EndOfSystem
     }
 }
 
@@ -64,7 +62,7 @@ impl Default for HandleStrategy {
 /// * The event type returned by `event_id()` must be the exact
 /// type which is handled by `handle_raw`. `handle_raw` must
 /// interpret any events as the same type.
-pub unsafe trait RawEventHandler: Send + Sync {
+pub unsafe trait RawEventHandler: Send + Sync + 'static {
     /// Returns the unique ID of this event handler, as allocated by `system_id_for::<T>()`.
     fn id(&self) -> SystemId;
 
@@ -90,7 +88,7 @@ pub unsafe trait RawEventHandler: Send + Sync {
 // High-level event handlers.
 
 /// An event handler. This type should be used by users, not `RawEventHandler`.
-pub trait EventHandler<E: Event>: Send + Sync {
+pub trait EventHandler<E: Event>: Send + Sync + 'static {
     /// The resources accessed by this event handler.
     type HandlerData: SystemData;
 
