@@ -8,12 +8,14 @@ use thread_local::ThreadLocal;
 
 mod builder;
 
+use crate::system::SystemCtx;
 use crate::{
     resources::RESOURCE_ID_MAPPINGS, system::SYSTEM_ID_MAPPINGS, EventId, RawEventHandler,
     RawSystem, ResourceId, Resources, SystemId,
 };
 pub use builder::SchedulerBuilder;
 use std::iter;
+use std::sync::Arc;
 
 /// Context of a running system, used for internal purposes.
 #[derive(Clone)]
@@ -86,7 +88,11 @@ pub(crate) enum TaskMessage {
     /// * The event ID must correspond to the type of event being handled.
     /// * `ptr` must be a pointer to an array of events of the corresponding
     /// type, allocated in one of the thread-local bump allocators.
-    TriggerEvents { id: EventId, ptr: *const [()] },
+    TriggerEvents {
+        id: EventId,
+        ptr: *const (),
+        len: usize,
+    },
 }
 
 unsafe impl Send for TaskMessage {}
@@ -99,7 +105,7 @@ unsafe impl Sync for TaskMessage {}
 enum Task {
     Stage(StageId),
     Oneshot(SystemId),
-    HandleEvent(EventId, *const [()]),
+    HandleEvent(EventId, *const (), usize),
     // TODO: event pipeline
 }
 
@@ -139,7 +145,7 @@ pub struct Scheduler {
     ///
     /// TODO: implement a lock-free bump arena instead.
     #[derivative(Debug = "ignore")]
-    bump: ThreadLocal<Bump>,
+    bump: Arc<ThreadLocal<Bump>>,
 
     /// Number of currently running systems.
     runnning_systems_count: usize,
@@ -291,7 +297,7 @@ impl Scheduler {
             end_of_tick_handlers: vec![],
 
             event_reads: vec![],
-            bump,
+            bump: Arc::new(bump),
 
             sender,
             receiver,
@@ -395,8 +401,8 @@ impl Scheduler {
                 });
                 self.stages[id.0].len()
             }
-            TaskMessage::TriggerEvents { id, ptr } => {
-                self.task_queue.push_back(Task::HandleEvent(id, ptr));
+            TaskMessage::TriggerEvents { id, ptr, len } => {
+                self.task_queue.push_back(Task::HandleEvent(id, ptr, len));
                 0
             }
             TaskMessage::EventHandlingComplete(id) => {
@@ -458,7 +464,7 @@ impl Scheduler {
                 self.dispatch_system(id);
                 1
             }
-            Task::HandleEvent(id, ptr) => {
+            Task::HandleEvent(id, ptr, len) => {
                 let running_systems = &mut self.running_systems;
                 let handlers = &self.end_of_tick_handlers[id.0];
 
@@ -466,7 +472,7 @@ impl Scheduler {
                     running_systems.insert(id.0);
                 });
 
-                self.dispatch_event_handlers(id, ptr);
+                self.dispatch_event_handlers(id, ptr, len);
 
                 let handlers = &self.end_of_tick_handlers[id.0];
                 handlers.len()
@@ -488,13 +494,22 @@ impl Scheduler {
         let systems = SharedMutRawPtr(&mut self.systems as *mut Vec<Option<Box<DynSystem>>>);
 
         let sender = self.sender.clone();
+        let bump = Arc::clone(&self.bump);
 
         rayon::spawn(move || {
             unsafe {
                 (&*stage.0)
                     .par_iter()
-                    .map(|sys_id| (&mut *systems.0)[sys_id.0].as_mut().unwrap())
-                    .for_each(|sys| sys.execute_raw(&*(resources.0)));
+                    .map(|sys_id| (sys_id, (&mut *systems.0)[sys_id.0].as_mut().unwrap()))
+                    .for_each(|(sys_id, sys)| {
+                        let ctx = SystemCtx {
+                            id: *sys_id,
+                            sender: sender.clone(),
+                            bump: Arc::clone(&bump),
+                        };
+
+                        sys.execute_raw(&*(resources.0), ctx);
+                    });
             }
 
             // TODO: events, oneshot
@@ -509,13 +524,15 @@ impl Scheduler {
             SharedMutRawPtr(sys.as_mut() as *mut dyn RawSystem)
         };
 
+        let ctx = self.create_system_ctx(id);
+
         let sender = self.sender.clone();
         rayon::spawn(move || {
             unsafe {
                 // Safety: the world is not dropped while the system
                 // executes, since `execute` will not return until
                 // all systems have completed.
-                (&mut *system.0).execute_raw(&*(resources.0));
+                (&mut *system.0).execute_raw(&*(resources.0), ctx);
             }
 
             // TODO: events
@@ -523,7 +540,7 @@ impl Scheduler {
         });
     }
 
-    fn dispatch_event_handlers(&mut self, id: EventId, ptr: *const [()]) {
+    fn dispatch_event_handlers(&mut self, id: EventId, ptr: *const (), len: usize) {
         let handler_ids =
             SharedRawPtr(&self.end_of_tick_handlers[id.0] as *const SmallVec<[SystemId; 4]>);
         let handlers =
@@ -532,21 +549,39 @@ impl Scheduler {
         let sender = self.sender.clone();
         let ptr = SharedRawPtr(ptr);
 
+        let sender = self.sender.clone();
+        let bump = Arc::clone(&self.bump);
+
         rayon::spawn(move || {
             // Safety: see dispatch_system().
             unsafe {
                 (&*handler_ids.0)
                     .iter()
-                    .map(|id| &mut (&mut *handlers.0)[id.0])
-                    .for_each(|handler| {
+                    .map(|id| (id, &mut (&mut *handlers.0)[id.0]))
+                    .for_each(|(handler_id, handler)| {
                         debug_assert_eq!(handler.event_id(), id);
-                        handler.handle_raw_batch(ptr.0, &*resources.0);
+
+                        let ctx = SystemCtx {
+                            id: *handler_id,
+                            sender: sender.clone(),
+                            bump: Arc::clone(&bump),
+                        };
+
+                        handler.handle_raw_batch(ptr.0, len, &*resources.0, ctx);
                         sender
                             .send(TaskMessage::SystemComplete(handler.id()))
                             .unwrap();
                     });
             }
         });
+    }
+
+    fn create_system_ctx(&self, id: SystemId) -> SystemCtx {
+        SystemCtx {
+            sender: self.sender.clone(),
+            id,
+            bump: Arc::clone(&self.bump),
+        }
     }
 }
 
@@ -595,7 +630,7 @@ fn reads_for_task<'a>(
     match task {
         Task::Stage(id) => &stage_reads[id.0],
         Task::Oneshot(id) => &system_reads[id.0],
-        Task::HandleEvent(id, _) => &event_reads[id.0],
+        Task::HandleEvent(id, _, _) => &event_reads[id.0],
     }
 }
 
@@ -608,7 +643,7 @@ fn writes_for_task<'a>(
     match task {
         Task::Stage(id) => &stage_writes[id.0],
         Task::Oneshot(id) => &system_writes[id.0],
-        Task::HandleEvent(id, _) => &event_writes[id.0],
+        Task::HandleEvent(id, _, _) => &event_writes[id.0],
     }
 }
 

@@ -1,9 +1,14 @@
 use crate::resources::Resource;
+use crate::scheduler::TaskMessage;
 use crate::{mappings::Mappings, resource_id_for, ResourceId, Resources};
+use bumpalo::Bump;
+use crossbeam::Sender;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use std::any::TypeId;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
+use thread_local::ThreadLocal;
 
 /// Unique ID of a system, allocated consecutively for use as indices into vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -43,7 +48,7 @@ pub trait RawSystem: Send + Sync {
     ///
     /// # Safety
     /// The system must not access any resources not indicated by `resource_reads()` and `resource_writes()`.
-    unsafe fn execute_raw(&mut self, resources: &Resources);
+    unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx);
 }
 
 // High-level system API
@@ -92,13 +97,23 @@ impl<S: System> RawSystem for CachedSystem<S> {
         &self.resource_writes
     }
 
-    unsafe fn execute_raw(&mut self, resources: &Resources) {
+    unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx) {
         let data = self
             .data
-            .get_or_insert_with(|| S::SystemData::load_from_resources(resources));
+            .get_or_insert_with(|| S::SystemData::load_from_resources(resources, ctx));
 
         self.inner.run(data);
     }
+}
+
+/// Context of a running system, immutable across runs.
+#[derive(Clone)]
+pub struct SystemCtx {
+    /// Sender to the scheduler.
+    pub(crate) sender: Sender<TaskMessage>,
+    /// ID of this system.
+    pub(crate) id: SystemId,
+    pub(crate) bump: Arc<ThreadLocal<Bump>>,
 }
 
 /// One or more resources in a tuple.
@@ -110,7 +125,12 @@ pub trait SystemData: Send + Sync {
     ///
     /// # Safety
     /// Only resources returned by `reads()` and `writes()` may be accessed.
-    unsafe fn load_from_resources(resources: &Resources) -> Self;
+    unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx) -> Self;
+
+    /// Called at the end of every system execution.
+    ///
+    /// The default implementation of this function is a no-op.
+    fn flush(&mut self) {}
 }
 
 impl SystemData for () {
@@ -122,7 +142,7 @@ impl SystemData for () {
         vec![]
     }
 
-    unsafe fn load_from_resources(_resources: &Resources) -> Self {}
+    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx) -> Self {}
 }
 
 /// Specifies a read requirement for a resource.
@@ -161,7 +181,7 @@ where
         vec![]
     }
 
-    unsafe fn load_from_resources(resources: &Resources) -> Self {
+    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx) -> Self {
         Self {
             ptr: resources.get(resource_id_for::<T>()) as *const T,
         }
@@ -213,7 +233,7 @@ where
         vec![resource_id_for::<T>()]
     }
 
-    unsafe fn load_from_resources(resources: &Resources) -> Self {
+    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx) -> Self {
         Self {
             ptr: resources.get_mut(resource_id_for::<T>()) as *mut T,
         }
@@ -239,8 +259,12 @@ macro_rules! impl_data {
                 res
             }
 
-            unsafe fn load_from_resources(resources: &Resources) -> Self {
-                ($($ty::load_from_resources(resources) ,)*)
+            unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx) -> Self {
+                ($($ty::load_from_resources(resources, ctx.clone()) ,)*)
+            }
+
+            fn flush(&mut self) {
+                // TODO
             }
         }
     }

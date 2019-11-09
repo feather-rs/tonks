@@ -1,9 +1,15 @@
 use crate::mappings::Mappings;
-use crate::system::SYSTEM_ID_MAPPINGS;
+use crate::scheduler::TaskMessage;
+use crate::system::{SystemCtx, SYSTEM_ID_MAPPINGS};
 use crate::{ResourceId, Resources, SystemData, SystemId};
+use crossbeam::Sender;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+use std::alloc::Layout;
 use std::any::TypeId;
+use std::marker::PhantomData;
+use std::mem;
+use std::ptr;
 
 /// ID of an event type, allocated consecutively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -82,7 +88,13 @@ pub unsafe trait RawEventHandler: Send + Sync + 'static {
     /// # Safety
     /// * The handler must not access any resources not indicated by `resource_reads()` and `resource_writes()`.
     /// * The given slice __must__ be transmuted to a slice of the event type returned by `event_id`.
-    unsafe fn handle_raw_batch(&mut self, events: *const [()], resources: &Resources);
+    unsafe fn handle_raw_batch(
+        &mut self,
+        events: *const (),
+        events_len: usize,
+        resources: &Resources,
+        ctx: SystemCtx,
+    );
 }
 
 // High-level event handlers.
@@ -173,19 +185,104 @@ where
         &self.resource_writes
     }
 
-    unsafe fn handle_raw_batch(&mut self, events: *const [()], resources: &Resources) {
+    unsafe fn handle_raw_batch(
+        &mut self,
+        events: *const (),
+        events_len: usize,
+        resources: &Resources,
+        ctx: SystemCtx,
+    ) {
         // https://github.com/nvzqz/static-assertions-rs/issues/21
         /*assert_eq_size!(*const [()], *const [H::Event]);
         assert_eq_align!(*const [()], *const [H::Event]);*/
 
-        let events = events as *const [E];
-        let events = &*events;
+        let events = unsafe { std::slice::from_raw_parts(events as *const E, events_len) };
 
         let data = self
             .data
-            .get_or_insert_with(|| H::HandlerData::load_from_resources(resources));
+            .get_or_insert_with(|| H::HandlerData::load_from_resources(resources, ctx));
 
         self.inner.handle_batch(events, data);
+    }
+}
+
+/// System data which allows you to trigger events of a given type.
+pub struct Trigger<E>
+where
+    E: Event,
+{
+    ctx: SystemCtx,
+    queued: Vec<E>,
+    id: EventId,
+}
+
+impl<E> SystemData for Trigger<E>
+where
+    E: Event,
+{
+    fn reads() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx) -> Self {
+        Self {
+            ctx,
+            queued: vec![],
+            id: event_id_for::<E>(),
+        }
+    }
+
+    fn flush(&mut self) {
+        // TODO: end-of-system handlers
+
+        // Move events to bump-allocated slice and send to scheduler.
+        let len = self.queued.len();
+        let ptr: *mut E = self
+            .ctx
+            .bump
+            .get_or_default()
+            .alloc_layout(Layout::for_value(self.queued.as_slice()))
+            .cast::<E>()
+            .as_ptr();
+
+        self.queued
+            .drain(..)
+            .enumerate()
+            .for_each(|(index, event)| unsafe {
+                ptr::write(ptr.offset(index as isize), event);
+            });
+
+        self.ctx.sender.send(TaskMessage::TriggerEvents {
+            id: self.id,
+            ptr: ptr as *const (),
+            len,
+        });
+    }
+}
+
+impl<E> Trigger<E>
+where
+    E: Event,
+{
+    /// Triggers multiple events at once.
+    ///
+    /// Events will be handled as per their handlers' `HandlingStrategy`s.
+    pub fn trigger_batched<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = E>,
+    {
+        self.queued.extend(iter);
+    }
+
+    /// Triggers a single event.
+    ///
+    /// The event will be handled as per its handlers' `HandlingStrategy`s.
+    pub fn trigger(&mut self, event: E) {
+        self.queued.push(event);
     }
 }
 
