@@ -2,12 +2,12 @@
 //! execution order while ensuring resource borrow safety.
 
 use crate::event::HandleStrategy;
+use crate::scheduler::OrExtend;
 use crate::{
     CachedEventHandler, CachedSystem, Event, EventHandler, RawEventHandler, RawSystem, ResourceId,
     Resources, Scheduler, System,
 };
 use hashbrown::HashSet;
-use std::iter;
 
 /// Builder of event pipelines.
 #[derive(Default)]
@@ -39,9 +39,9 @@ impl EventsBuilder {
             _ => unimplemented!("unimplemented handle strategy"),
         };
 
-        events_vec.extend(iter::repeat_with(|| vec![]).take(event_id.0 - events_vec.len() + 1));
-
-        events_vec[event_id.0].push(Box::new(handler));
+        events_vec
+            .get_mut_or_extend(event_id.0)
+            .push(Box::new(handler));
     }
 
     /// Adds an event handler to this builder, returning the `EventsBuilder`

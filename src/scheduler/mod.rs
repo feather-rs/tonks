@@ -115,6 +115,27 @@ enum Task {
 unsafe impl Send for Task {}
 unsafe impl Sync for Task {}
 
+pub trait OrExtend<T> {
+    fn set_or_extend(&mut self, index: usize, value: T);
+    fn get_mut_or_extend(&mut self, index: usize) -> &mut T;
+}
+
+impl<T: Default> OrExtend<T> for Vec<T> {
+    fn set_or_extend(&mut self, index: usize, value: T) {
+        if index >= self.len() {
+            self.extend(iter::repeat_with(|| T::default()).take(index - self.len() + 1));
+        }
+        self[index] = value;
+    }
+
+    fn get_mut_or_extend(&mut self, index: usize) -> &mut T {
+        if index >= self.len() {
+            self.extend(iter::repeat_with(|| T::default()).take(index - self.len() + 1));
+        }
+        &mut self[index]
+    }
+}
+
 /// The `tonks` scheduler. This is similar to `shred::Dispatcher`
 /// but has more features.
 #[derive(Derivative)]
@@ -272,12 +293,23 @@ impl Scheduler {
             .collect();
 
         let mut event_handlers = Vec::with_capacity(end_of_dispatch_handlers.len());
+        let mut event_reads: Vec<ResourceVec> = vec![];
+        let mut event_writes: Vec<ResourceVec> = vec![];
 
         for handler in end_of_dispatch_handlers.into_iter().flatten() {
             let id = handler.id().0;
             for _ in 0..id - event_handlers.len() + 1 {
                 event_handlers.push(None);
             }
+
+            let event_id = handler.event_id().0;
+
+            event_reads
+                .get_mut_or_extend(event_id)
+                .extend(handler.resource_reads().iter().copied());
+            event_writes
+                .get_mut_or_extend(event_id)
+                .extend(handler.resource_writes().iter().copied());
 
             event_handlers[id] = Some(handler);
         }
@@ -314,12 +346,13 @@ impl Scheduler {
             event_handlers,
             end_of_tick_handlers: construct_end_of_dispatch_handlers,
 
-            event_reads: vec![],
+            event_reads,
+            event_writes,
+
             bump: Arc::new(bump),
 
             sender,
             receiver,
-            event_writes: vec![],
         }
     }
 
@@ -329,6 +362,11 @@ impl Scheduler {
             .enumerate()
             .map(|(id, _)| Task::Stage(StageId(id)))
             .collect()
+    }
+
+    /// Returns the `Resources` for this scheduler.
+    pub fn resources(&self) -> &Resources {
+        &self.resources
     }
 
     /// Executes all systems and handles events.
@@ -421,10 +459,15 @@ impl Scheduler {
             }
             TaskMessage::TriggerEvents { id, ptr, len } => {
                 self.task_queue.push_back(Task::HandleEvent(id, ptr, len));
+                dbg!();
                 0
             }
             TaskMessage::EventHandlingComplete(id) => {
                 self.release_resources_for_event_handler(id);
+                let running_systems = &mut self.running_systems;
+                self.end_of_tick_handlers[id.0].iter().for_each(|id| {
+                    running_systems.remove(id.0);
+                });
                 self.end_of_tick_handlers[id.0].len()
             }
         }
@@ -585,10 +628,9 @@ impl Scheduler {
                         };
 
                         handler.handle_raw_batch(ptr.0, len, &*resources.0, ctx);
-                        sender
-                            .send(TaskMessage::SystemComplete(handler.id()))
-                            .unwrap();
                     });
+
+                sender.send(TaskMessage::EventHandlingComplete(id)).unwrap();
             }
         });
     }

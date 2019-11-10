@@ -103,6 +103,8 @@ impl<S: System> RawSystem for CachedSystem<S> {
             .get_or_insert_with(|| S::SystemData::load_from_resources(resources, ctx));
 
         self.inner.run(data);
+
+        data.flush();
     }
 }
 
