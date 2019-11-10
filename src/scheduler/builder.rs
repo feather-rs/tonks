@@ -32,6 +32,8 @@ impl EventsBuilder {
     {
         let handler = CachedEventHandler::new(handler);
 
+        assert_valid_deps(handler.resource_reads(), handler.resource_writes());
+
         let event_id = handler.event_id();
 
         let events_vec = match handler.strategy() {
@@ -88,28 +90,7 @@ impl SchedulerBuilder {
     pub fn add<S: System + 'static>(&mut self, system: S) {
         let system = CachedSystem::new(system);
 
-        // Verify that there are no conflicts in the system's own resource access.
-        // This prevents UB such as mutable aliasing.
-        assert!(
-            system
-                .resource_reads()
-                .iter()
-                .all(|resource| !system.resource_writes().contains(resource)),
-            "system cannot read and write same resource"
-        );
-        let valid_mutable = system.resource_writes().iter().all(|resource| {
-            !system.resource_reads().contains(resource)
-                && system
-                    .resource_writes()
-                    .iter()
-                    .filter(|res| *res == resource)
-                    .count()
-                    == 1
-        });
-        assert!(
-            valid_mutable,
-            "system cannot have double mutable access to the same resource"
-        );
+        assert_valid_deps(system.resource_reads(), system.resource_writes());
 
         if let Some(stage) = self
             .stages
@@ -206,4 +187,20 @@ impl Stage {
         });
         self.systems.push(Box::new(system));
     }
+}
+
+fn assert_valid_deps(reads: &[ResourceId], writes: &[ResourceId]) {
+    // Verify that there are no conflicts in the system's own resource access.
+    // This prevents UB such as mutable aliasing.
+    assert!(
+        reads.iter().all(|resource| !writes.contains(resource)),
+        "system cannot read and write same resource"
+    );
+    let valid_mutable = writes.iter().all(|resource| {
+        !reads.contains(resource) && writes.iter().filter(|res| *res == resource).count() == 1
+    });
+    assert!(
+        valid_mutable,
+        "system cannot have double mutable access to the same resource"
+    );
 }
