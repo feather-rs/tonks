@@ -103,14 +103,14 @@ pub trait EventHandler<E: Event>: Send + Sync + 'static {
 
     /// Handles a single event. Users may implement `handle_batch`
     /// instead which handles multiple events at once.
-    fn handle(&self, event: &E, data: &mut Self::HandlerData);
+    fn handle(&mut self, event: &E, data: &mut Self::HandlerData);
 
     /// Handles a slice of events. This function may be called instead of `handle`
     /// when multiple events are concerned.
     ///
     /// The default implementation for this function simply calls `handle` on each
     /// event in the slice.
-    fn handle_batch(&self, events: &[E], data: &mut Self::HandlerData) {
+    fn handle_batch(&mut self, events: &[E], data: &mut Self::HandlerData) {
         events.iter().for_each(|event| self.handle(event, data));
     }
 

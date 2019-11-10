@@ -415,7 +415,23 @@ impl Scheduler {
             &task,
         );
 
-        match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held) {
+        // For event handlers, we have to check that the handler is not already running, since it takes &mut self.
+        let not_running = if let Task::HandleEvent(id, _, _) = &task {
+            if self.end_of_tick_handlers[id.0]
+                .iter()
+                .any(|id| self.running_systems.contains(id.0))
+            {
+                Err(())
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
+
+        match try_obtain_resources(reads, writes, &mut self.reads_held, &mut self.writes_held)
+            .and(not_running)
+        {
             Ok(()) => {
                 // Run task and proceed.
                 let systems = self.dispatch_task(task);

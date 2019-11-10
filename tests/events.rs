@@ -23,11 +23,11 @@ fn basic() {
     impl EventHandler<Ev> for Handler {
         type HandlerData = ();
 
-        fn handle(&self, _event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, _event: &Ev, _data: &mut Self::HandlerData) {
             unreachable!()
         }
 
-        fn handle_batch(&self, events: &[Ev], _data: &mut Self::HandlerData) {
+        fn handle_batch(&mut self, events: &[Ev], _data: &mut Self::HandlerData) {
             assert_eq!(events, &[Ev(1), Ev(2), Ev(3), Ev(5)]);
         }
     }
@@ -64,11 +64,11 @@ fn zero_sized() {
     impl EventHandler<Ev> for Handler {
         type HandlerData = ();
 
-        fn handle(&self, _event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, _event: &Ev, _data: &mut Self::HandlerData) {
             unreachable!()
         }
 
-        fn handle_batch(&self, events: &[Ev], _data: &mut Self::HandlerData) {
+        fn handle_batch(&mut self, events: &[Ev], _data: &mut Self::HandlerData) {
             assert_eq!(events.len(), 1024);
         }
     }
@@ -111,7 +111,7 @@ fn multi_trigger() {
     impl EventHandler<Ev> for Handler {
         type HandlerData = Write<HashMap<Ev, usize>>;
 
-        fn handle(&self, event: &Ev, count: &mut Self::HandlerData) {
+        fn handle(&mut self, event: &Ev, count: &mut Self::HandlerData) {
             *count.entry(*event).or_insert(0) += 1;
         }
     }
@@ -165,7 +165,7 @@ fn multi_handler() {
     impl EventHandler<Ev> for Handler1 {
         type HandlerData = ();
 
-        fn handle(&self, event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, event: &Ev, _data: &mut Self::HandlerData) {
             assert_eq!(event, &Ev(1));
         }
     }
@@ -175,11 +175,11 @@ fn multi_handler() {
     impl EventHandler<Ev> for Handler2 {
         type HandlerData = ();
 
-        fn handle(&self, _event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, _event: &Ev, _data: &mut Self::HandlerData) {
             unreachable!()
         }
 
-        fn handle_batch(&self, events: &[Ev], _data: &mut Self::HandlerData) {
+        fn handle_batch(&mut self, events: &[Ev], _data: &mut Self::HandlerData) {
             assert_eq!(events.len(), 1_000_000);
         }
     }
