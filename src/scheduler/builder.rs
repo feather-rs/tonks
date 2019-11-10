@@ -1,24 +1,85 @@
 //! Building of stage pipelines, which are used to organize system
 //! execution order while ensuring resource borrow safety.
 
-use crate::{CachedSystem, RawSystem, ResourceId, Resources, Scheduler, System};
+use crate::event::HandleStrategy;
+use crate::{
+    CachedEventHandler, CachedSystem, Event, EventHandler, RawEventHandler, RawSystem, ResourceId,
+    Resources, Scheduler, System,
+};
 use hashbrown::HashSet;
+use std::iter;
+
+/// Builder of event pipelines.
+#[derive(Default)]
+pub struct EventsBuilder {
+    /// Vector of end-of-dispatch event handlers.
+    ///
+    /// This vector is indexed by the `EventId`.
+    end_of_dispatch: Vec<Vec<Box<dyn RawEventHandler>>>,
+}
+
+impl EventsBuilder {
+    /// Creates a new `EventsBuilder` with no event handlers.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds an event handler.
+    pub fn add<H, E>(&mut self, handler: H)
+    where
+        H: EventHandler<E>,
+        E: Event,
+    {
+        let handler = CachedEventHandler::new(handler);
+
+        let event_id = handler.event_id();
+
+        let events_vec = match handler.strategy() {
+            HandleStrategy::EndOfTick => &mut self.end_of_dispatch,
+            _ => unimplemented!("unimplemented handle strategy"),
+        };
+
+        events_vec.extend(iter::repeat_with(|| vec![]).take(event_id.0 - events_vec.len() + 1));
+
+        events_vec[event_id.0].push(Box::new(handler));
+    }
+
+    /// Adds an event handler to this builder, returning the `EventsBuilder`
+    /// for method chaining.
+    pub fn with<H, E>(mut self, handler: H) -> Self
+    where
+        H: EventHandler<E>,
+        E: Event,
+    {
+        self.add(handler);
+        self
+    }
+
+    /// Finishes construction of this events builder, returning a `SchedulerBuilder`
+    /// which can be used to further add systems.
+    pub fn finish(self) -> SchedulerBuilder {
+        SchedulerBuilder {
+            stages: vec![],
+            events: self,
+        }
+    }
+}
 
 /// Builder of a stage pipeline.
+#[derive(Default)]
 pub struct SchedulerBuilder {
     /// Stages which have been created so far. New systems can
     /// be inserted into existing stages or be added in a new stage.
     stages: Vec<Stage>,
-}
-
-impl Default for SchedulerBuilder {
-    fn default() -> Self {
-        Self { stages: vec![] }
-    }
+    events: EventsBuilder,
 }
 
 impl SchedulerBuilder {
     /// Creates a new `StageBuilder` with no systems.
+    ///
+    /// If you want to use event handlers, build an `EventsBuilder`
+    /// and call `finish()` on it to create a `SchedulerBuilder`
+    /// with those events registered.
     pub fn new() -> Self {
         Self::default()
     }
@@ -87,7 +148,13 @@ impl SchedulerBuilder {
             systems.push(stage.systems);
         }
 
-        Scheduler::new(systems, reads, writes, resources)
+        Scheduler::new(
+            systems,
+            self.events.end_of_dispatch,
+            reads,
+            writes,
+            resources,
+        )
     }
 }
 

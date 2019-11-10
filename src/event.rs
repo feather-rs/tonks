@@ -2,13 +2,10 @@ use crate::mappings::Mappings;
 use crate::scheduler::TaskMessage;
 use crate::system::{SystemCtx, SYSTEM_ID_MAPPINGS};
 use crate::{ResourceId, Resources, SystemData, SystemId};
-use crossbeam::Sender;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use std::alloc::Layout;
 use std::any::TypeId;
-use std::marker::PhantomData;
-use std::mem;
 use std::ptr;
 
 /// ID of an event type, allocated consecutively.
@@ -49,16 +46,16 @@ pub enum HandleStrategy {
     /// This is the default strategy.
     Immediate,*/
     /// The handler will be run at the end of the system which triggered the event.
-    ///
-    /// This is the default strategy.
     EndOfSystem,
     /// The handle will be scheduled for running at the end of tick.
+    ///
+    /// This is the default strategy.
     EndOfTick,
 }
 
 impl Default for HandleStrategy {
     fn default() -> Self {
-        HandleStrategy::EndOfSystem
+        HandleStrategy::EndOfTick
     }
 }
 
@@ -196,7 +193,7 @@ where
         /*assert_eq_size!(*const [()], *const [H::Event]);
         assert_eq_align!(*const [()], *const [H::Event]);*/
 
-        let events = unsafe { std::slice::from_raw_parts(events as *const E, events_len) };
+        let events = std::slice::from_raw_parts(events as *const E, events_len);
 
         let data = self
             .data
@@ -228,7 +225,7 @@ where
         vec![]
     }
 
-    unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx) -> Self {
+    unsafe fn load_from_resources(_resources: &Resources, ctx: SystemCtx) -> Self {
         Self {
             ctx,
             queued: vec![],
@@ -256,11 +253,14 @@ where
                 ptr::write(ptr.offset(index as isize), event);
             });
 
-        self.ctx.sender.send(TaskMessage::TriggerEvents {
-            id: self.id,
-            ptr: ptr as *const (),
-            len,
-        });
+        self.ctx
+            .sender
+            .send(TaskMessage::TriggerEvents {
+                id: self.id,
+                ptr: ptr as *const (),
+                len,
+            })
+            .unwrap();
     }
 }
 

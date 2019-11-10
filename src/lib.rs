@@ -9,12 +9,13 @@ extern crate static_assertions;
 mod event;
 mod mappings;
 mod resources;
+
 mod scheduler;
 mod system;
 
-pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandler};
+pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandler, Trigger};
 pub use resources::{resource_id_for, ResourceId, Resources};
-pub use scheduler::{Scheduler, SchedulerBuilder};
+pub use scheduler::{EventsBuilder, Scheduler, SchedulerBuilder};
 pub use system::{
     system_id_for, CachedSystem, RawSystem, Read, System, SystemData, SystemId, Write,
 };

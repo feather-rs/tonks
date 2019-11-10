@@ -13,7 +13,7 @@ use crate::{
     resources::RESOURCE_ID_MAPPINGS, system::SYSTEM_ID_MAPPINGS, EventId, RawEventHandler,
     RawSystem, ResourceId, Resources, SystemId,
 };
-pub use builder::SchedulerBuilder;
+pub use builder::{EventsBuilder, SchedulerBuilder};
 use std::iter;
 use std::sync::Arc;
 
@@ -186,7 +186,7 @@ pub struct Scheduler {
     /// Entries which correspond to normal systems rather than event handlers
     /// are `None`.
     #[derivative(Debug = "ignore")]
-    event_handlers: Vec<Box<dyn RawEventHandler>>,
+    event_handlers: Vec<Option<Box<dyn RawEventHandler>>>,
 
     /// Vector containing the event handler system IDs required for handling
     /// each given event. All handlers in this vector have `EndOfTick` handle
@@ -224,6 +224,7 @@ impl Scheduler {
     /// no two systems in a stage may conflict with each other.
     pub fn new(
         stages: Vec<Vec<Box<DynSystem>>>,
+        end_of_dispatch_handlers: Vec<Vec<Box<dyn RawEventHandler>>>,
         read_deps: Vec<Vec<ResourceId>>,
         write_deps: Vec<Vec<ResourceId>>,
         resources: Resources,
@@ -264,6 +265,23 @@ impl Scheduler {
             stage_systems.push(systems_in_stage);
         }
 
+        // Construct event handlers
+        let construct_end_of_dispatch_handlers = end_of_dispatch_handlers
+            .iter()
+            .map(|handlers| handlers.iter().map(|handler| handler.id()).collect())
+            .collect();
+
+        let mut event_handlers = Vec::with_capacity(end_of_dispatch_handlers.len());
+
+        for handler in end_of_dispatch_handlers.into_iter().flatten() {
+            let id = handler.id().0;
+            for _ in 0..id - event_handlers.len() + 1 {
+                event_handlers.push(None);
+            }
+
+            event_handlers[id] = Some(handler);
+        }
+
         // We use a bounded channel because the only overhead
         // is typically on the sender's side—the receiver, the scheduler, should
         // plow through messages. This may be changed in the future.
@@ -293,8 +311,8 @@ impl Scheduler {
             stage_reads,
             stage_writes,
 
-            event_handlers: vec![],
-            end_of_tick_handlers: vec![],
+            event_handlers,
+            end_of_tick_handlers: construct_end_of_dispatch_handlers,
 
             event_reads: vec![],
             bump: Arc::new(bump),
@@ -544,12 +562,11 @@ impl Scheduler {
         let handler_ids =
             SharedRawPtr(&self.end_of_tick_handlers[id.0] as *const SmallVec<[SystemId; 4]>);
         let handlers =
-            SharedMutRawPtr(&mut self.event_handlers as *mut Vec<Box<dyn RawEventHandler>>);
+            SharedMutRawPtr(&mut self.event_handlers as *mut Vec<Option<Box<dyn RawEventHandler>>>);
         let resources = SharedRawPtr(&self.resources as *const Resources);
         let sender = self.sender.clone();
         let ptr = SharedRawPtr(ptr);
 
-        let sender = self.sender.clone();
         let bump = Arc::clone(&self.bump);
 
         rayon::spawn(move || {
@@ -557,7 +574,7 @@ impl Scheduler {
             unsafe {
                 (&*handler_ids.0)
                     .iter()
-                    .map(|id| (id, &mut (&mut *handlers.0)[id.0]))
+                    .map(|id| (id, (&mut *handlers.0)[id.0].as_mut().unwrap()))
                     .for_each(|(handler_id, handler)| {
                         debug_assert_eq!(handler.event_id(), id);
 
