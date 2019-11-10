@@ -1,6 +1,9 @@
 use hashbrown::HashMap;
 use std::iter;
-use tonks::{resource_id_for, EventHandler, EventsBuilder, Resources, System, Trigger, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tonks::{
+    resource_id_for, EventHandler, EventsBuilder, Read, Resources, System, Trigger, Write,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Ev(u32);
@@ -137,8 +140,6 @@ fn multi_trigger() {
                 .get_mut::<HashMap<Ev, usize>>(resource_id_for::<HashMap<Ev, usize>>())
         };
 
-        dbg!(counts.clone());
-
         assert_eq!(counts.len(), 3);
         for ev in [Ev(2), Ev(3), Ev(0xFF)].iter() {
             assert_eq!(counts[ev], 1024);
@@ -193,5 +194,55 @@ fn multi_handler() {
 
     for _ in 0..10 {
         scheduler.execute();
+    }
+}
+
+#[test]
+fn recursive_trigger() {
+    struct Sys;
+
+    impl System for Sys {
+        type SystemData = Trigger<Ev>;
+
+        fn run(&mut self, trigger: &mut Self::SystemData) {
+            trigger.trigger(Ev(5));
+        }
+    }
+
+    struct Handler;
+
+    impl EventHandler<Ev> for Handler {
+        type HandlerData = (Read<AtomicUsize>, Trigger<Ev>);
+
+        fn handle(&mut self, event: &Ev, (counter, trigger): &mut Self::HandlerData) {
+            dbg!(event);
+            if event.0 > 1 {
+                trigger.trigger_batched([Ev(event.0 - 1), Ev(event.0 - 2)].iter().copied());
+            } else {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    let mut resources = Resources::new();
+    resources.insert(AtomicUsize::new(0));
+
+    let mut scheduler = EventsBuilder::new()
+        .with(Handler)
+        .finish()
+        .with(Sys)
+        .build(resources);
+
+    for _ in 0..1 {
+        scheduler.execute();
+
+        let count = unsafe {
+            scheduler
+                .resources()
+                .get::<AtomicUsize>(resource_id_for::<AtomicUsize>())
+                .load(Ordering::Relaxed)
+        };
+
+        assert_eq!(count, 8);
     }
 }

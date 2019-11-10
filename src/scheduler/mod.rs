@@ -160,7 +160,7 @@ pub struct Scheduler {
     /// holding a shared reference to a resource.
     ///
     /// This vector is indexed by the `ResourceId`.
-    reads_held: Vec<u8>,
+    reads_held: Vec<u32>,
 
     /// Thread-local bump allocator used to allocate events.
     ///
@@ -475,7 +475,6 @@ impl Scheduler {
             }
             TaskMessage::TriggerEvents { id, ptr, len } => {
                 self.task_queue.push_back(Task::HandleEvent(id, ptr, len));
-                dbg!();
                 0
             }
             TaskMessage::EventHandlingComplete(id) => {
@@ -665,7 +664,7 @@ impl Scheduler {
 fn try_obtain_resources(
     reads: &ResourceVec,
     writes: &ResourceVec,
-    reads_held: &mut [u8],
+    reads_held: &mut [u32],
     writes_held: &mut BitSet,
 ) -> Result<(), ()> {
     // First, go through resources and confirm that there are no conflicting

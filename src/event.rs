@@ -200,6 +200,8 @@ where
             .get_or_insert_with(|| H::HandlerData::load_from_resources(resources, ctx));
 
         self.inner.handle_batch(events, data);
+
+        data.flush();
     }
 }
 
@@ -238,6 +240,11 @@ where
 
         // Move events to bump-allocated slice and send to scheduler.
         let len = self.queued.len();
+
+        if len == 0 {
+            return; // Nothing to do
+        }
+
         let ptr: *mut E = self
             .ctx
             .bump
