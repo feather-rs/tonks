@@ -3,17 +3,17 @@ extern crate derivative;
 #[macro_use]
 extern crate mopa;
 #[macro_use]
-#[cfg(test)]
 extern crate static_assertions;
 
 mod event;
 mod mappings;
+mod query;
 mod resources;
-//mod query;
 mod scheduler;
 mod system;
 
 pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandler, Trigger};
+pub use query::{PreparedQuery, PreparedWorld, Query};
 pub use resources::{resource_id_for, ResourceId, Resources};
 pub use scheduler::{EventsBuilder, Scheduler, SchedulerBuilder};
 pub use system::{
