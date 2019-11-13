@@ -1,4 +1,5 @@
 use hashbrown::HashMap;
+use legion::world::World;
 use std::iter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tonks::{
@@ -47,7 +48,7 @@ fn basic() {
         .build(Resources::default());
 
     for _ in 0..1000 {
-        scheduler.execute();
+        scheduler.execute(&mut World::new());
     }
 }
 
@@ -92,7 +93,7 @@ fn zero_sized() {
         .build(Resources::default());
 
     for _ in 0..1000 {
-        scheduler.execute();
+        scheduler.execute(&mut World::new());
     }
 }
 
@@ -141,7 +142,7 @@ fn multi_trigger() {
     let mut scheduler = builder.build(resources);
 
     for _ in 0..10 {
-        scheduler.execute();
+        scheduler.execute(&mut World::new());
 
         let counts = unsafe {
             scheduler
@@ -206,7 +207,7 @@ fn multi_handler() {
         .build(Resources::default());
 
     for _ in 0..10 {
-        scheduler.execute();
+        scheduler.execute(&mut World::new());
     }
 }
 
@@ -251,7 +252,7 @@ fn recursive_trigger() {
         .build(resources);
 
     for _ in 0..1 {
-        scheduler.execute();
+        scheduler.execute(&mut World::new());
 
         let count = unsafe {
             scheduler

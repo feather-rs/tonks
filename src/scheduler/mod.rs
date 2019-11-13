@@ -14,6 +14,7 @@ use crate::{
     RawSystem, ResourceId, Resources, SystemId,
 };
 pub use builder::{EventsBuilder, SchedulerBuilder};
+use legion::world::World;
 use std::iter;
 use std::sync::Arc;
 
@@ -240,10 +241,10 @@ impl Scheduler {
     /// `deps` is a vector indexed by the system ID containing
     /// resources for each system.
     ///
-    /// # Contract
+    /// # Safety
     /// The stages are assumed to have been assembled correctly:
     /// no two systems in a stage may conflict with each other.
-    pub fn new(
+    unsafe fn new(
         stages: Vec<Vec<Box<DynSystem>>>,
         end_of_dispatch_handlers: Vec<Vec<Box<dyn RawEventHandler>>>,
         read_deps: Vec<Vec<ResourceId>>,
@@ -370,7 +371,7 @@ impl Scheduler {
     }
 
     /// Executes all systems and handles events.
-    pub fn execute(&mut self) {
+    pub fn execute(&mut self, world: &mut World) {
         // Reset the task queue to the starting queue.
         self.task_queue.extend(self.starting_queue.iter().copied());
 
@@ -380,7 +381,7 @@ impl Scheduler {
         // complete by listening on the channel.
         while let Some(task) = self.task_queue.pop_front() {
             // Attempt to run task.
-            self.run_task(task);
+            self.run_task(task, world);
         }
 
         // Wait for remaining systems to complete.
@@ -390,7 +391,7 @@ impl Scheduler {
 
             // Run any handlers/oneshots scheduled by these systems
             while let Some(task) = self.task_queue.pop_front() {
-                self.run_task(task);
+                self.run_task(task, world);
             }
         }
 
@@ -401,7 +402,7 @@ impl Scheduler {
         assert!(self.running_systems.is_empty());
     }
 
-    fn run_task(&mut self, task: Task) {
+    fn run_task(&mut self, task: Task, world: &mut World) {
         let reads = reads_for_task(
             &self.stage_reads,
             &self.system_reads,
@@ -434,7 +435,7 @@ impl Scheduler {
         {
             Ok(()) => {
                 // Run task and proceed.
-                let systems = self.dispatch_task(task);
+                let systems = self.dispatch_task(task, world);
                 self.runnning_systems_count += systems;
             }
             Err(()) => {
@@ -525,19 +526,19 @@ impl Scheduler {
     }
 
     /// Dispatches a task, returning the number of systems spawned.
-    fn dispatch_task(&mut self, task: Task) -> usize {
+    fn dispatch_task(&mut self, task: Task, world: &mut World) -> usize {
         match task {
             Task::Stage(id) => {
                 let running_systems = &mut self.running_systems;
                 self.stages[id.0].iter().for_each(|id| {
                     running_systems.insert(id.0);
                 });
-                self.dispatch_stage(id);
+                self.dispatch_stage(id, world);
                 self.stages[id.0].len()
             }
             Task::Oneshot(id) => {
                 self.running_systems.insert(id.0);
-                self.dispatch_system(id);
+                self.dispatch_system(id, world);
                 1
             }
             Task::HandleEvent(id, ptr, len) => {
@@ -548,7 +549,7 @@ impl Scheduler {
                     running_systems.insert(id.0);
                 });
 
-                self.dispatch_event_handlers(id, ptr, len);
+                self.dispatch_event_handlers(id, ptr, len, world);
 
                 let handlers = &self.end_of_tick_handlers[id.0];
                 handlers.len()
@@ -556,7 +557,7 @@ impl Scheduler {
         }
     }
 
-    fn dispatch_stage(&mut self, id: StageId) {
+    fn dispatch_stage(&mut self, id: StageId, world: &mut World) {
         // Rather than spawning each system independently, we optimize
         // this by running them in batch. This reduces synchronization overhead
         // with the scheduler using channels.
@@ -568,6 +569,8 @@ impl Scheduler {
         let resources = SharedRawPtr(&self.resources as *const Resources);
 
         let systems = SharedMutRawPtr(&mut self.systems as *mut Vec<Option<Box<DynSystem>>>);
+
+        let world = SharedRawPtr(world as *const World);
 
         let sender = self.sender.clone();
         let bump = Arc::clone(&self.bump);
@@ -584,7 +587,7 @@ impl Scheduler {
                             bump: Arc::clone(&bump),
                         };
 
-                        sys.execute_raw(&*(resources.0), ctx);
+                        sys.execute_raw(&*resources.0, ctx, &*world.0);
                     });
             }
 
@@ -593,8 +596,10 @@ impl Scheduler {
         });
     }
 
-    fn dispatch_system(&mut self, id: SystemId) {
+    fn dispatch_system(&mut self, id: SystemId, world: &World) {
         let resources = SharedRawPtr(&self.resources as *const Resources);
+        let world = SharedRawPtr(world as *const World);
+
         let system = {
             let sys = self.systems[id.0].as_mut().unwrap();
             SharedMutRawPtr(sys.as_mut() as *mut dyn RawSystem)
@@ -608,7 +613,7 @@ impl Scheduler {
                 // Safety: the world is not dropped while the system
                 // executes, since `execute` will not return until
                 // all systems have completed.
-                (&mut *system.0).execute_raw(&*(resources.0), ctx);
+                (&mut *system.0).execute_raw(&*resources.0, ctx, &*world.0);
             }
 
             // TODO: events
@@ -616,7 +621,13 @@ impl Scheduler {
         });
     }
 
-    fn dispatch_event_handlers(&mut self, id: EventId, ptr: *const (), len: usize) {
+    fn dispatch_event_handlers(
+        &mut self,
+        id: EventId,
+        ptr: *const (),
+        len: usize,
+        world: &mut World,
+    ) {
         let handler_ids =
             SharedRawPtr(&self.end_of_tick_handlers[id.0] as *const SmallVec<[SystemId; 4]>);
         let handlers =
@@ -624,6 +635,7 @@ impl Scheduler {
         let resources = SharedRawPtr(&self.resources as *const Resources);
         let sender = self.sender.clone();
         let ptr = SharedRawPtr(ptr);
+        let world = SharedRawPtr(world as *const World);
 
         let bump = Arc::clone(&self.bump);
 
@@ -642,7 +654,7 @@ impl Scheduler {
                             bump: Arc::clone(&bump),
                         };
 
-                        handler.handle_raw_batch(ptr.0, len, &*resources.0, ctx);
+                        handler.handle_raw_batch(ptr.0, len, &*resources.0, ctx, &*world.0);
                     });
 
                 sender.send(TaskMessage::EventHandlingComplete(id)).unwrap();

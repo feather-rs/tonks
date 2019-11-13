@@ -3,6 +3,7 @@ use crate::scheduler::TaskMessage;
 use crate::system::{SystemCtx, SYSTEM_ID_MAPPINGS};
 use crate::{ResourceId, Resources, SystemData, SystemId};
 use lazy_static::lazy_static;
+use legion::world::World;
 use parking_lot::Mutex;
 use std::alloc::Layout;
 use std::any::TypeId;
@@ -91,6 +92,7 @@ pub unsafe trait RawEventHandler: Send + Sync + 'static {
         events_len: usize,
         resources: &Resources,
         ctx: SystemCtx,
+        world: &World,
     );
 }
 
@@ -190,6 +192,7 @@ where
         events_len: usize,
         resources: &Resources,
         ctx: SystemCtx,
+        world: &World,
     ) {
         // https://github.com/nvzqz/static-assertions-rs/issues/21
         /*assert_eq_size!(*const [()], *const [H::Event]);
@@ -199,7 +202,7 @@ where
 
         let data = self
             .data
-            .get_or_insert_with(|| H::HandlerData::load_from_resources(resources, ctx));
+            .get_or_insert_with(|| H::HandlerData::load_from_resources(resources, ctx, world));
 
         self.inner.handle_batch(events, data.prepare());
 
@@ -235,7 +238,7 @@ where
         vec![]
     }
 
-    unsafe fn load_from_resources(_resources: &Resources, ctx: SystemCtx) -> Self {
+    unsafe fn load_from_resources(_resources: &Resources, ctx: SystemCtx, _world: &World) -> Self {
         Self {
             ctx,
             queued: vec![],

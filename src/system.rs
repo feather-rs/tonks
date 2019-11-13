@@ -4,6 +4,7 @@ use crate::{mappings::Mappings, resource_id_for, ResourceId, Resources};
 use bumpalo::Bump;
 use crossbeam::Sender;
 use lazy_static::lazy_static;
+use legion::world::World;
 use parking_lot::Mutex;
 use std::any::TypeId;
 use std::ops::{Deref, DerefMut};
@@ -48,7 +49,7 @@ pub trait RawSystem: Send + Sync {
     ///
     /// # Safety
     /// The system must not access any resources not indicated by `resource_reads()` and `resource_writes()`.
-    unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx);
+    unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx, world: &World);
 }
 
 // High-level system API
@@ -97,10 +98,10 @@ impl<S: System> RawSystem for CachedSystem<S> {
         &self.resource_writes
     }
 
-    unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx) {
+    unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx, world: &World) {
         let data = self
             .data
-            .get_or_insert_with(|| S::SystemData::load_from_resources(resources, ctx));
+            .get_or_insert_with(|| S::SystemData::load_from_resources(resources, ctx, world));
 
         self.inner.run(data.prepare());
 
@@ -132,11 +133,12 @@ pub trait SystemData<'a>: Send + Sync {
     fn reads() -> Vec<ResourceId>;
     fn writes() -> Vec<ResourceId>;
 
-    /// Loads this `SystemData` from the provided `Resources`.
+    /// Loads this `SystemData` from the provided `Resources`
+    /// and `legion::World`.
     ///
     /// # Safety
     /// Only resources returned by `reads()` and `writes()` may be accessed.
-    unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx) -> Self;
+    unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx, world: &World) -> Self;
 
     /// Called at the end of every system execution.
     ///
@@ -157,7 +159,8 @@ impl<'a> SystemData<'a> for () {
         vec![]
     }
 
-    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx) -> Self {}
+    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
+    }
 }
 
 /// Specifies a read requirement for a resource.
@@ -202,7 +205,7 @@ where
         vec![]
     }
 
-    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx) -> Self {
+    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
         Self {
             ptr: resources.get(resource_id_for::<T>()) as *const T,
         }
@@ -260,7 +263,7 @@ where
         vec![resource_id_for::<T>()]
     }
 
-    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx) -> Self {
+    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
         Self {
             ptr: resources.get_mut(resource_id_for::<T>()) as *mut T,
         }
@@ -292,8 +295,8 @@ macro_rules! impl_data {
                 res
             }
 
-            unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx) -> Self {
-                ($($ty::load_from_resources(resources, ctx.clone()) ,)*)
+            unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx, world: &World) -> Self {
+                ($($ty::load_from_resources(resources, ctx.clone(), world) ,)*)
             }
 
             fn flush(&mut self) {

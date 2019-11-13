@@ -129,13 +129,17 @@ impl SchedulerBuilder {
             systems.push(stage.systems);
         }
 
-        Scheduler::new(
-            systems,
-            self.events.end_of_dispatch,
-            reads,
-            writes,
-            resources,
-        )
+        // Safety: the builder must work correctly to ensure
+        // that stages are correct.
+        unsafe {
+            Scheduler::new(
+                systems,
+                self.events.end_of_dispatch,
+                reads,
+                writes,
+                resources,
+            )
+        }
     }
 }
 

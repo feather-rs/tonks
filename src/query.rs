@@ -34,7 +34,7 @@ where
         vec![]
     }
 
-    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx) -> Self {
+    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
         Self { inner: V::query() }
     }
 }
@@ -48,8 +48,22 @@ assert_impl_all!(World: Send, Sync);
 unsafe impl Send for PreparedWorld {}
 unsafe impl Sync for PreparedWorld {}
 
-impl PreparedWorld {
-    pub(crate) fn new(world: &World) -> Self {
+impl<'a> SystemData<'a> for PreparedWorld {
+    type Output = &'a mut Self;
+
+    fn prepare(&'a mut self) -> Self::Output {
+        self
+    }
+
+    fn reads() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, world: &World) -> Self {
         Self {
             world: world as *const _,
         }

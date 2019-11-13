@@ -1,3 +1,4 @@
+use legion::world::World;
 use tonks::{Read, Resources, SchedulerBuilder, System, SystemData, Write};
 
 struct Resource1(u32);
@@ -62,5 +63,5 @@ fn basic() {
 
     println!("{:?}", scheduler);
 
-    scheduler.execute();
+    scheduler.execute(&mut World::new());
 }
