@@ -54,10 +54,10 @@ pub trait RawSystem: Send + Sync {
 // High-level system API
 
 /// A system. TODO: docs
-pub trait System: Send + Sync {
-    type SystemData: SystemData;
+pub trait System: Send + Sync + 'static {
+    type SystemData: for<'a> SystemData<'a>;
 
-    fn run(&mut self, data: &mut Self::SystemData);
+    fn run(&mut self, data: <Self::SystemData as SystemData>::Output);
 }
 
 pub struct CachedSystem<S: System> {
@@ -102,7 +102,7 @@ impl<S: System> RawSystem for CachedSystem<S> {
             .data
             .get_or_insert_with(|| S::SystemData::load_from_resources(resources, ctx));
 
-        self.inner.run(data);
+        self.inner.run(data.prepare());
 
         data.flush();
     }
@@ -119,7 +119,16 @@ pub struct SystemCtx {
 }
 
 /// One or more resources in a tuple.
-pub trait SystemData: Send + Sync {
+pub trait SystemData<'a>: Send + Sync {
+    /// Type which is actually passed to systems.
+    type Output: 'a;
+
+    /// Prepares this `SysetmData`, returning `Self::Output`
+    /// to pass to a system.
+    ///
+    /// This function is called before every sysetm execution.
+    fn prepare(&'a mut self) -> Self::Output;
+
     fn reads() -> Vec<ResourceId>;
     fn writes() -> Vec<ResourceId>;
 
@@ -135,7 +144,11 @@ pub trait SystemData: Send + Sync {
     fn flush(&mut self) {}
 }
 
-impl SystemData for () {
+impl<'a> SystemData<'a> for () {
+    type Output = Self;
+
+    fn prepare(&'a mut self) -> Self::Output {}
+
     fn reads() -> Vec<ResourceId> {
         vec![]
     }
@@ -171,10 +184,16 @@ where
 unsafe impl<T: Send + Resource> Send for Read<T> {}
 unsafe impl<T: Send + Sync + Resource> Sync for Read<T> {}
 
-impl<T> SystemData for Read<T>
+impl<'a, T> SystemData<'a> for Read<T>
 where
     T: Resource,
 {
+    type Output = &'a mut Self;
+
+    fn prepare(&'a mut self) -> Self::Output {
+        self
+    }
+
     fn reads() -> Vec<ResourceId> {
         vec![resource_id_for::<T>()]
     }
@@ -223,10 +242,16 @@ where
 unsafe impl<T: Send + Resource> Send for Write<T> {}
 unsafe impl<T: Send + Sync + Resource> Sync for Write<T> {}
 
-impl<T> SystemData for Write<T>
+impl<'a, T> SystemData<'a> for Write<T>
 where
     T: Resource,
 {
+    type Output = &'a mut Self;
+
+    fn prepare(&'a mut self) -> Self::Output {
+        self
+    }
+
     fn reads() -> Vec<ResourceId> {
         vec![]
     }
@@ -244,7 +269,13 @@ where
 
 macro_rules! impl_data {
     ( $($ty:ident),* ; $($idx:tt),*) => {
-        impl <$($ty),*> SystemData for ($($ty,)*) where $($ty: SystemData),* {
+        impl <'a, $($ty),*> SystemData<'a> for ($($ty,)*) where $($ty: SystemData<'a>),* {
+            type Output = ($($ty::Output ,)*);
+
+            fn prepare(&'a mut self) -> Self::Output {
+                ($(self.$idx.prepare() ,)*)
+            }
+
             fn reads() -> Vec<ResourceId> {
                 let mut res = vec![];
                 $(

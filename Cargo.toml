@@ -5,7 +5,7 @@ authors = ["caelunshun <caelunshun@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-# legion = { git = "https://github.com/jaynus/legion", branch = "systems", rev = "f8ef758364c7d203a696fc292c9f0fba9f86c10a" }
+legion = { git = "https://github.com/TomGillen/legion", rev = "2eab55dc5a3a84fbc8505cc16eb780ef0cdd019b" }
 crossbeam = "0.7"
 hashbrown = "0.6"
 rayon = "1.2"

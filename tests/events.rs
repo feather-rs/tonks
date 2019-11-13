@@ -2,7 +2,8 @@ use hashbrown::HashMap;
 use std::iter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tonks::{
-    resource_id_for, EventHandler, EventsBuilder, Read, Resources, System, Trigger, Write,
+    resource_id_for, EventHandler, EventsBuilder, Read, Resources, System, SystemData, Trigger,
+    Write,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -15,7 +16,7 @@ fn basic() {
     impl System for Sys {
         type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, trigger: &mut Self::SystemData) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger(Ev(1));
             trigger.trigger_batched([Ev(2), Ev(3), Ev(5)].iter().copied());
         }
@@ -26,11 +27,15 @@ fn basic() {
     impl EventHandler<Ev> for Handler {
         type HandlerData = ();
 
-        fn handle(&mut self, _event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, _event: &Ev, _data: &mut <Self::HandlerData as SystemData>::Output) {
             unreachable!()
         }
 
-        fn handle_batch(&mut self, events: &[Ev], _data: &mut Self::HandlerData) {
+        fn handle_batch(
+            &mut self,
+            events: &[Ev],
+            _data: <Self::HandlerData as SystemData>::Output,
+        ) {
             assert_eq!(events, &[Ev(1), Ev(2), Ev(3), Ev(5)]);
         }
     }
@@ -56,7 +61,7 @@ fn zero_sized() {
     impl System for Sys {
         type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, trigger: &mut Self::SystemData) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger(Ev);
             trigger.trigger_batched(iter::repeat(Ev).take(1023));
         }
@@ -67,11 +72,15 @@ fn zero_sized() {
     impl EventHandler<Ev> for Handler {
         type HandlerData = ();
 
-        fn handle(&mut self, _event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, _event: &Ev, _data: &mut <Self::HandlerData as SystemData>::Output) {
             unreachable!()
         }
 
-        fn handle_batch(&mut self, events: &[Ev], _data: &mut Self::HandlerData) {
+        fn handle_batch(
+            &mut self,
+            events: &[Ev],
+            _data: <Self::HandlerData as SystemData>::Output,
+        ) {
             assert_eq!(events.len(), 1024);
         }
     }
@@ -94,7 +103,7 @@ fn multi_trigger() {
     impl System for Sys1 {
         type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, trigger: &mut Self::SystemData) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger_batched([Ev(2), Ev(3)].iter().copied());
         }
     }
@@ -114,7 +123,7 @@ fn multi_trigger() {
     impl EventHandler<Ev> for Handler {
         type HandlerData = Write<HashMap<Ev, usize>>;
 
-        fn handle(&mut self, event: &Ev, count: &mut Self::HandlerData) {
+        fn handle(&mut self, event: &Ev, count: &mut <Self::HandlerData as SystemData>::Output) {
             *count.entry(*event).or_insert(0) += 1;
         }
     }
@@ -156,7 +165,7 @@ fn multi_handler() {
     impl System for Sys {
         type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, trigger: &mut Self::SystemData) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger_batched(iter::repeat(Ev(1)).take(1_000_000));
         }
     }
@@ -166,7 +175,7 @@ fn multi_handler() {
     impl EventHandler<Ev> for Handler1 {
         type HandlerData = ();
 
-        fn handle(&mut self, event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, event: &Ev, _data: &mut <Self::HandlerData as SystemData>::Output) {
             assert_eq!(event, &Ev(1));
         }
     }
@@ -176,11 +185,15 @@ fn multi_handler() {
     impl EventHandler<Ev> for Handler2 {
         type HandlerData = ();
 
-        fn handle(&mut self, _event: &Ev, _data: &mut Self::HandlerData) {
+        fn handle(&mut self, _event: &Ev, _data: &mut <Self::HandlerData as SystemData>::Output) {
             unreachable!()
         }
 
-        fn handle_batch(&mut self, events: &[Ev], _data: &mut Self::HandlerData) {
+        fn handle_batch(
+            &mut self,
+            events: &[Ev],
+            _data: <Self::HandlerData as SystemData>::Output,
+        ) {
             assert_eq!(events.len(), 1_000_000);
         }
     }
@@ -204,7 +217,7 @@ fn recursive_trigger() {
     impl System for Sys {
         type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, trigger: &mut Self::SystemData) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger(Ev(5));
         }
     }
@@ -214,7 +227,11 @@ fn recursive_trigger() {
     impl EventHandler<Ev> for Handler {
         type HandlerData = (Read<AtomicUsize>, Trigger<Ev>);
 
-        fn handle(&mut self, event: &Ev, (counter, trigger): &mut Self::HandlerData) {
+        fn handle(
+            &mut self,
+            event: &Ev,
+            (counter, trigger): &mut <Self::HandlerData as SystemData>::Output,
+        ) {
             dbg!(event);
             if event.0 > 1 {
                 trigger.trigger_batched([Ev(event.0 - 1), Ev(event.0 - 2)].iter().copied());

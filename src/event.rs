@@ -99,19 +99,21 @@ pub unsafe trait RawEventHandler: Send + Sync + 'static {
 /// An event handler. This type should be used by users, not `RawEventHandler`.
 pub trait EventHandler<E: Event>: Send + Sync + 'static {
     /// The resources accessed by this event handler.
-    type HandlerData: SystemData;
+    type HandlerData: for<'a> SystemData<'a>;
 
     /// Handles a single event. Users may implement `handle_batch`
     /// instead which handles multiple events at once.
-    fn handle(&mut self, event: &E, data: &mut Self::HandlerData);
+    fn handle(&mut self, event: &E, data: &mut <Self::HandlerData as SystemData>::Output);
 
     /// Handles a slice of events. This function may be called instead of `handle`
     /// when multiple events are concerned.
     ///
     /// The default implementation for this function simply calls `handle` on each
     /// event in the slice.
-    fn handle_batch(&mut self, events: &[E], data: &mut Self::HandlerData) {
-        events.iter().for_each(|event| self.handle(event, data));
+    fn handle_batch(&mut self, events: &[E], mut data: <Self::HandlerData as SystemData>::Output) {
+        events
+            .iter()
+            .for_each(|event| self.handle(event, &mut data));
     }
 
     /// Returns the strategy that should be used to invoke this handler.
@@ -199,7 +201,7 @@ where
             .data
             .get_or_insert_with(|| H::HandlerData::load_from_resources(resources, ctx));
 
-        self.inner.handle_batch(events, data);
+        self.inner.handle_batch(events, data.prepare());
 
         data.flush();
     }
@@ -215,10 +217,16 @@ where
     id: EventId,
 }
 
-impl<E> SystemData for Trigger<E>
+impl<'a, E> SystemData<'a> for Trigger<E>
 where
     E: Event,
 {
+    type Output = &'a mut Self;
+
+    fn prepare(&'a mut self) -> Self::Output {
+        self
+    }
+
     fn reads() -> Vec<ResourceId> {
         vec![]
     }

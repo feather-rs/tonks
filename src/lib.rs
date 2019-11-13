@@ -9,7 +9,7 @@ extern crate static_assertions;
 mod event;
 mod mappings;
 mod resources;
-
+//mod query;
 mod scheduler;
 mod system;
 

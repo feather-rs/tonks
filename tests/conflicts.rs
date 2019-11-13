@@ -1,6 +1,6 @@
 //! Check various conflicts involving resource access.
 
-use tonks::{EventHandler, EventsBuilder, Read, SchedulerBuilder, System, Write};
+use tonks::{EventHandler, EventsBuilder, Read, SchedulerBuilder, System, SystemData, Write};
 
 struct Resource1(u32);
 
@@ -10,7 +10,7 @@ impl System for DoubleWrite {
     // Big UB if not handled correctly!
     type SystemData = (Write<Resource1>, Write<Resource1>);
 
-    fn run(&mut self, _data: &mut Self::SystemData) {
+    fn run(&mut self, _data: <Self::SystemData as SystemData>::Output) {
         panic!("mutable alias reached");
     }
 }
@@ -18,7 +18,7 @@ impl System for DoubleWrite {
 impl EventHandler<()> for DoubleWrite {
     type HandlerData = (Write<Resource1>, Write<Resource1>);
 
-    fn handle(&mut self, _event: &(), _data: &mut Self::HandlerData) {
+    fn handle(&mut self, _event: &(), _data: &mut <Self::HandlerData as SystemData>::Output) {
         panic!("mutable alias reached")
     }
 }
@@ -29,7 +29,7 @@ impl System for ReadAndWrite {
     // Also UB!
     type SystemData = (Write<Resource1>, Read<Resource1>);
 
-    fn run(&mut self, _data: &mut Self::SystemData) {
+    fn run(&mut self, _data: <Self::SystemData as SystemData>::Output) {
         panic!("mutable alias reached");
     }
 }
@@ -37,7 +37,7 @@ impl System for ReadAndWrite {
 impl EventHandler<()> for ReadAndWrite {
     type HandlerData = (Write<Resource1>, Read<Resource1>);
 
-    fn handle(&mut self, _event: &(), _data: &mut Self::HandlerData) {
+    fn handle(&mut self, _event: &(), _data: &mut <Self::HandlerData as SystemData>::Output) {
         panic!("mutable alias reached");
     }
 }
