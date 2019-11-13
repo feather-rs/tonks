@@ -39,6 +39,7 @@ fn basic() {
             assert_eq!(ages["Jar Jar Binks"], 2);
             assert_eq!(ages["Bill Gates"], 64);
             assert_eq!(ages["Donald Trump"], 3);
+            assert!(!ages.contains_key("Undefined"));
         }
     }
 
