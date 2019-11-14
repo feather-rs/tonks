@@ -1,7 +1,7 @@
 //! Type-level query APIs as wrappers over Legion queries.
 
 use crate::system::SystemCtx;
-use crate::{ResourceId, Resources, SystemData};
+use crate::{ResourceId, Resources, SystemData, SystemDataOutput};
 use legion::filter::EntityFilter;
 use legion::query::{ChunkDataIter, ChunkViewIter, DefaultFilter, IntoQuery, View};
 use legion::world::World;
@@ -70,6 +70,10 @@ impl<'a> SystemData<'a> for PreparedWorld {
     }
 }
 
+impl<'a> SystemDataOutput<'a> for &'a mut PreparedWorld {
+    type SystemData = PreparedWorld;
+}
+
 /// A query which has been prepared for passing to a system.
 pub struct PreparedQuery<'a, V, F>
 where
@@ -94,4 +98,12 @@ where
     > {
         unsafe { self.query.iter_unchecked(&*world.world) }
     }
+}
+
+impl<'a, V> SystemDataOutput<'a> for PreparedQuery<'a, V, <V as DefaultFilter>::Filter>
+where
+    V: for<'v> View<'v> + DefaultFilter,
+    <V as DefaultFilter>::Filter: Send + Sync,
+{
+    type SystemData = Query<V>;
 }

@@ -8,7 +8,7 @@ struct TestSystem;
 impl tonks::System for TestSystem {
     type SystemData = ();
 
-    fn run(&mut self, data: &mut <Self::SystemData as SystemData>::Output) {
+    fn run(&mut self, data: <Self::SystemData as SystemData>::Output) {
         unimplemented!()
     }
 }

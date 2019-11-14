@@ -233,7 +233,6 @@ fn recursive_trigger() {
             event: &Ev,
             (counter, trigger): &mut <Self::HandlerData as SystemData>::Output,
         ) {
-            dbg!(event);
             if event.0 > 1 {
                 trigger.trigger_batched([Ev(event.0 - 1), Ev(event.0 - 2)].iter().copied());
             } else {

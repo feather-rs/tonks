@@ -1,6 +1,6 @@
 use crate::mappings::Mappings;
 use crate::scheduler::TaskMessage;
-use crate::system::{SystemCtx, SYSTEM_ID_MAPPINGS};
+use crate::system::{SystemCtx, SystemDataOutput, SYSTEM_ID_MAPPINGS};
 use crate::{ResourceId, Resources, SystemData, SystemId};
 use lazy_static::lazy_static;
 use legion::world::World;
@@ -280,6 +280,13 @@ where
             })
             .unwrap();
     }
+}
+
+impl<'a, E> SystemDataOutput<'a> for &'a mut Trigger<E>
+where
+    E: Event,
+{
+    type SystemData = Trigger<E>;
 }
 
 impl<E> Trigger<E>
