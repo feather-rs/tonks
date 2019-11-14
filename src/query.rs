@@ -3,7 +3,9 @@
 use crate::system::SystemCtx;
 use crate::{ResourceId, Resources, SystemData, SystemDataOutput};
 use legion::filter::EntityFilter;
-use legion::query::{ChunkDataIter, ChunkViewIter, DefaultFilter, IntoQuery, View};
+use legion::query::{
+    ChunkDataIter, ChunkEntityIter, ChunkViewIter, DefaultFilter, IntoQuery, ReadOnly, View,
+};
 use legion::world::World;
 
 pub struct Query<V>
@@ -86,9 +88,157 @@ impl<'a, V> PreparedQuery<'a, V>
 where
     V: for<'v> View<'v> + DefaultFilter,
 {
-    pub fn iter<'b, 'data>(
+    // Implementations "borrowed" from Legion's codebase with a few modifications, licensed under MIT.
+    // Don't blame me—I'm not going to write all this!
+
+    /// Gets an iterator which iterates through all chunks that match the query.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[inline]
+    pub unsafe fn iter_chunks_unchecked<'b, 'c>(
+        &'c mut self,
+        world: &PreparedWorld,
+    ) -> ChunkViewIter<
+        'b,
+        'c,
+        V,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+    > {
+        self.query.iter_chunks_unchecked(&*world.world)
+    }
+
+    /// Gets an iterator which iterates through all chunks that match the query.
+    pub fn iter_chunks_immutable<'b, 'c>(
+        &'c mut self,
+        world: &PreparedWorld,
+    ) -> ChunkViewIter<
+        'b,
+        'c,
+        V,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+    >
+    where
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.iter_chunks_unchecked(world) }
+    }
+
+    /// Gets an iterator which iterates through all chunks that match the query.
+    pub fn iter_chunks<'b, 'c>(
+        &'c mut self,
+        world: &mut PreparedWorld,
+    ) -> ChunkViewIter<
+        'b,
+        'c,
+        V,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+        <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+    > {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.iter_chunks_unchecked(world) }
+    }
+
+    /// Gets an iterator which iterates through all entity data that matches the query, and also yields the the `Entity` IDs.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[inline]
+    pub unsafe fn iter_entities_unchecked<'b, 'c>(
+        &'c mut self,
+        world: &PreparedWorld,
+    ) -> ChunkEntityIter<
+        'b,
+        V,
+        ChunkViewIter<
+            'b,
+            'c,
+            V,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+        >,
+    > {
+        self.query.iter_entities_unchecked(&*world.world)
+    }
+
+    /// Gets an iterator which iterates through all entity data that matches the query, and also yields the the `Entity` IDs.
+    #[inline]
+    pub fn iter_entities_immutable<'b, 'c>(
+        &'c mut self,
+        world: &PreparedWorld,
+    ) -> ChunkEntityIter<
+        'b,
+        V,
+        ChunkViewIter<
+            'b,
+            'c,
+            V,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+        >,
+    >
+    where
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.iter_entities_unchecked(world) }
+    }
+
+    /// Gets an iterator which iterates through all entity data that matches the query, and also yields the the `Entity` IDs.
+    #[inline]
+    pub fn iter_entities<'b, 'c>(
+        &'c mut self,
+        world: &mut PreparedWorld,
+    ) -> ChunkEntityIter<
+        'b,
+        V,
+        ChunkViewIter<
+            'b,
+            'c,
+            V,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+        >,
+    > {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.iter_entities_unchecked(world) }
+    }
+
+    /// Gets an iterator which iterates through all entity data that matches the query.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[inline]
+    pub unsafe fn iter_unchecked<'b, 'data>(
         &'b mut self,
-        world: &'data mut PreparedWorld,
+        world: &PreparedWorld,
     ) -> ChunkDataIter<
         'data,
         V,
@@ -101,7 +251,343 @@ where
             <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
         >,
     > {
-        unsafe { self.query.iter_unchecked(&*world.world) }
+        (&mut *self.query).iter_unchecked(&*world.world)
+    }
+
+    /// Gets an iterator which iterates through all entity data that matches the query.
+    #[inline]
+    pub fn iter_immutable<'b, 'data>(
+        &'b mut self,
+        world: &PreparedWorld,
+    ) -> ChunkDataIter<
+        'data,
+        V,
+        ChunkViewIter<
+            'data,
+            'b,
+            V,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+        >,
+    >
+    where
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.iter_unchecked(world) }
+    }
+
+    /// Gets an iterator which iterates through all entity data that matches the query.
+    #[inline]
+    pub fn iter<'b, 'data>(
+        &'b mut self,
+        world: &mut PreparedWorld,
+    ) -> ChunkDataIter<
+        'data,
+        V,
+        ChunkViewIter<
+            'data,
+            'b,
+            V,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+        >,
+    > {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.iter_unchecked(world) }
+    }
+
+    /// Iterates through all entity data that matches the query.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[inline]
+    pub unsafe fn for_each_unchecked<'b, 'data, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn(<<V as View<'data>>::Iter as Iterator>::Item),
+    {
+        (&mut *self.query).for_each_unchecked(&*world.world, f)
+    }
+
+    /// Iterates through all entity data that matches the query.
+    #[inline]
+    pub fn for_each_immutable<'b, 'data, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn(<<V as View<'data>>::Iter as Iterator>::Item),
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.for_each_unchecked(world, f) }
+    }
+
+    /// Iterates through all entity data that matches the query.
+    #[inline]
+    pub fn for_each<'b, 'data, T>(&'b mut self, world: &mut PreparedWorld, f: T)
+    where
+        T: Fn(<<V as View<'data>>::Iter as Iterator>::Item),
+    {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.for_each_unchecked(world, f) }
+    }
+
+    /// Iterates through all entity data that matches the query.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub unsafe fn for_each_entities_unchecked<'b, 'data, T>(
+        &'b mut self,
+        world: &PreparedWorld,
+        f: T,
+    ) where
+        T: Fn((Entity, <<V as View<'data>>::Iter as Iterator>::Item)),
+    {
+        (&mut *self.query).for_each_entities_unchecked(&*world.world, f)
+    }
+
+    /// Iterates through all entity data that matches the query.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn for_each_entities_immutable<'b, 'data, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn((Entity, <<V as View<'data>>::Iter as Iterator>::Item)),
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.for_each_entities_unchecked(world, f) }
+    }
+
+    /// Iterates through all entity data that matches the query.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn for_each_entities<'b, 'data, T>(&'b mut self, world: &mut PreparedWorld, f: T)
+    where
+        T: Fn((Entity, <<V as View<'data>>::Iter as Iterator>::Item)),
+    {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.for_each_entities_unchecked(world, f) }
+    }
+
+    /// Iterates through all entities that matches the query in parallel by chunk.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub unsafe fn par_entities_for_each_unchecked<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn((Entity, <<V as View<'b>>::Iter as Iterator>::Item)) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+    {
+        (&mut *self.query).par_entities_for_each_unchecked(&*world.world, f)
+    }
+
+    /// Iterates through all entities that matches the query in parallel by chunk.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn par_entities_for_each_immutable<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn((Entity, <<V as View<'b>>::Iter as Iterator>::Item)) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.par_entities_for_each_unchecked(world, f) }
+    }
+
+    /// Iterates through all entities that matches the query in parallel by chunk.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn par_entities_for_each<'b, T>(&'b mut self, world: &mut PreparedWorld, f: T)
+    where
+        T: Fn((Entity, <<V as View<'b>>::Iter as Iterator>::Item)) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+    {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.par_entities_for_each_unchecked(world, f) }
+    }
+
+    /// Iterates through all entity data that matches the query in parallel.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub unsafe fn par_for_each_unchecked<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn(<<V as View<'b>>::Iter as Iterator>::Item) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+    {
+        (&mut *self.query).par_for_each_unchecked(&*world.world, f)
+    }
+
+    /// Iterates through all entity data that matches the query in parallel.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn par_for_each_immutable<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn(<<V as View<'b>>::Iter as Iterator>::Item) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.par_for_each_unchecked(world, f) }
+    }
+
+    /// Iterates through all entity data that matches the query in parallel.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn par_for_each<'b, T>(&'b mut self, world: &mut PreparedWorld, f: T)
+    where
+        T: Fn(<<V as View<'b>>::Iter as Iterator>::Item) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+    {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.par_for_each_unchecked(world, f) }
+    }
+
+    /// Gets a parallel iterator of chunks that match the query.
+    /// Does not perform static borrow checking.
+    ///
+    /// # Safety
+    ///
+    /// Incorrectly accessing components that are already borrowed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if other code is concurrently accessing the same components.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub unsafe fn par_for_each_chunk_unchecked<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn(Chunk<'b, V>) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+    {
+        (&mut *self.query).par_for_each_chunk_unchecked(&*world.world, f)
+    }
+
+    /// Gets a parallel iterator of chunks that match the query.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn par_for_each_chunk_immutable<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
+    where
+        T: Fn(Chunk<'b, V>) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+        V: ReadOnly,
+    {
+        // safe because the view can only read data immutably
+        unsafe { self.par_for_each_chunk_unchecked(world, f) }
+    }
+
+    /// Gets a parallel iterator of chunks that match the query.
+    #[cfg(feature = "par-iter")]
+    #[inline]
+    pub fn par_for_each_chunk<'b, T>(&'b mut self, world: &mut PreparedWorld, f: T)
+    where
+        T: Fn(Chunk<'b, V>) + Send + Sync,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter as Filter<
+            ArchetypeFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter as Filter<
+            ChunksetFilterData<'b>,
+        >>::Iter: FissileIterator,
+        <<<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter as Filter<
+            ChunkFilterData<'b>,
+        >>::Iter: FissileIterator,
+    {
+        // safe because the &mut PreparedWorld ensures exclusivity
+        unsafe { self.par_for_each_chunk_unchecked(world, f) }
     }
 }
 
