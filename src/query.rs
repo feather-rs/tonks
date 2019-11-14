@@ -18,7 +18,7 @@ where
     V: for<'v> View<'v> + DefaultFilter,
     <V as DefaultFilter>::Filter: Send + Sync + 'a,
 {
-    type Output = PreparedQuery<'a, V, <V as DefaultFilter>::Filter>;
+    type Output = PreparedQuery<'a, V>;
 
     fn prepare(&'a mut self) -> Self::Output {
         PreparedQuery {
@@ -75,18 +75,16 @@ impl<'a> SystemDataOutput<'a> for &'a mut PreparedWorld {
 }
 
 /// A query which has been prepared for passing to a system.
-pub struct PreparedQuery<'a, V, F>
+pub struct PreparedQuery<'a, V>
 where
-    V: for<'v> View<'v>,
-    F: EntityFilter,
+    V: DefaultFilter + for<'v> View<'v>,
 {
-    query: &'a mut legion::query::Query<V, F>,
+    query: &'a mut legion::query::Query<V, <V as DefaultFilter>::Filter>,
 }
 
-impl<'a, V, F> PreparedQuery<'a, V, F>
+impl<'a, V> PreparedQuery<'a, V>
 where
-    V: for<'v> View<'v>,
-    F: EntityFilter,
+    V: for<'v> View<'v> + DefaultFilter,
 {
     pub fn iter<'b, 'data>(
         &'b mut self,
@@ -94,16 +92,23 @@ where
     ) -> ChunkDataIter<
         'data,
         V,
-        ChunkViewIter<'data, 'b, V, F::ArchetypeFilter, F::ChunksetFilter, F::ChunkFilter>,
+        ChunkViewIter<
+            'data,
+            'b,
+            V,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ArchetypeFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
+            <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
+        >,
     > {
         unsafe { self.query.iter_unchecked(&*world.world) }
     }
 }
 
-impl<'a, V> SystemDataOutput<'a> for PreparedQuery<'a, V, <V as DefaultFilter>::Filter>
+impl<'a, V> SystemDataOutput<'a> for PreparedQuery<'a, V>
 where
     V: for<'v> View<'v> + DefaultFilter,
-    <V as DefaultFilter>::Filter: Send + Sync,
+    <V as DefaultFilter>::Filter: Sync,
 {
     type SystemData = Query<V>;
 }

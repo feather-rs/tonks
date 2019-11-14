@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "nightly", feature(specialization))]
+
 #[macro_use]
 extern crate derivative;
 #[macro_use]
