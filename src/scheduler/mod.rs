@@ -8,9 +8,10 @@ use thread_local::ThreadLocal;
 
 mod builder;
 
+use crate::event::event_id_for;
 use crate::system::SystemCtx;
 use crate::{
-    resources::RESOURCE_ID_MAPPINGS, system::SYSTEM_ID_MAPPINGS, EventId, RawEventHandler,
+    resources::RESOURCE_ID_MAPPINGS, system::SYSTEM_ID_MAPPINGS, Event, EventId, RawEventHandler,
     RawSystem, ResourceId, Resources, SystemId,
 };
 pub use builder::{EventsBuilder, SchedulerBuilder};
@@ -400,6 +401,38 @@ impl Scheduler {
 
         assert!(self.task_queue.is_empty());
         assert!(self.running_systems.is_empty());
+    }
+
+    /// Triggers an event manually.
+    pub fn trigger<E>(&mut self, event: E, world: &mut World)
+    where
+        E: Event,
+    {
+        let event_handlers = &mut self.event_handlers;
+        let end_of_tick_handlers = &self.end_of_tick_handlers;
+        let slice = &[event];
+        let sender = self.sender.clone();
+        let bump = &self.bump;
+        let resources = &self.resources;
+
+        end_of_tick_handlers
+            .get(event_id_for::<E>().0)
+            .map(|handler_ids| {
+                handler_ids.iter().for_each(|id| unsafe {
+                    let ctx = SystemCtx {
+                        id: *id,
+                        sender: sender.clone(),
+                        bump: Arc::clone(bump),
+                    };
+                    event_handlers[id.0].as_mut().unwrap().handle_raw_batch(
+                        slice.as_ptr() as *const (),
+                        1,
+                        &resources,
+                        ctx,
+                        &world,
+                    );
+                });
+            });
     }
 
     fn run_task(&mut self, task: Task, world: &mut World) {
