@@ -23,7 +23,7 @@ fn basic() {
         assert_eq!(
             scheduler
                 .resources()
-                .get::<Resource2>(resource_id_for::<Resource2>())
+                .get_unchecked::<Resource2>(resource_id_for::<Resource2>())
                 .0,
             15
         );

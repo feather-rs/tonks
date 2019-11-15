@@ -147,7 +147,7 @@ fn multi_trigger() {
         let counts = unsafe {
             scheduler
                 .resources()
-                .get_mut::<HashMap<Ev, usize>>(resource_id_for::<HashMap<Ev, usize>>())
+                .get_mut_unchecked::<HashMap<Ev, usize>>(resource_id_for::<HashMap<Ev, usize>>())
         };
 
         assert_eq!(counts.len(), 3);
@@ -256,7 +256,7 @@ fn recursive_trigger() {
         let count = unsafe {
             scheduler
                 .resources()
-                .get::<AtomicUsize>(resource_id_for::<AtomicUsize>())
+                .get_unchecked::<AtomicUsize>(resource_id_for::<AtomicUsize>())
                 .load(Ordering::Relaxed)
         };
 

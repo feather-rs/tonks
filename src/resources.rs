@@ -61,6 +61,23 @@ impl Resources {
         Self::default()
     }
 
+    /// Returns a reference to the resource.
+    ///
+    /// # Panics
+    /// Panics if the resource does not exist.
+    pub fn get<T: Resource>(&self) -> &T {
+        unsafe { self.get_unchecked(resource_id_for::<T>()) }
+    }
+
+    /// Returns a mutable reference to the resource.
+    ///
+    /// # Panics
+    /// Panics if the resource does not exist.
+    pub fn get_mut<T: Resource>(&mut self) -> &mut T {
+        // Safety: borrow rules are enforced through &mut self.
+        unsafe { self.get_mut_unchecked(resource_id_for::<T>()) }
+    }
+
     /// Returns a reference to the resource with the given ID.
     ///
     /// # Safety
@@ -69,7 +86,7 @@ impl Resources {
     ///
     /// In addition, the type of the resource being requested must match
     /// the ID. (This is checked in debug mode.)
-    pub unsafe fn get<T: Resource>(&self, id: ResourceId) -> &T {
+    pub unsafe fn get_unchecked<T: Resource>(&self, id: ResourceId) -> &T {
         debug_assert_eq!(resource_id_for::<T>(), id);
         ((&*self.resources[id.0].get())
             .as_ref()
@@ -88,7 +105,7 @@ impl Resources {
     /// In addition, the type of the resource being requested must match
     /// the ID. (This is checked in debug mode.)
     #[allow(clippy::mut_from_ref)] // Function is unsafe: users are responsible for this.
-    pub unsafe fn get_mut<T: Resource>(&self, id: ResourceId) -> &mut T {
+    pub unsafe fn get_mut_unchecked<T: Resource>(&self, id: ResourceId) -> &mut T {
         debug_assert_eq!(resource_id_for::<T>(), id);
 
         (self.resources[id.0]
@@ -129,8 +146,8 @@ mod tests {
         resources.insert(1usize);
 
         unsafe {
-            assert_eq!(resources.get::<i32>(ResourceId(0)), &1);
-            assert_eq!(resources.get::<usize>(ResourceId(1)), &1);
+            assert_eq!(resources.get_unchecked::<i32>(ResourceId(0)), &1);
+            assert_eq!(resources.get_unchecked::<usize>(ResourceId(1)), &1);
         }
     }
 }

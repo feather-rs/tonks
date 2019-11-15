@@ -216,7 +216,7 @@ where
 
     unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
         Self {
-            ptr: resources.get(resource_id_for::<T>()) as *const T,
+            ptr: resources.get_unchecked(resource_id_for::<T>()) as *const T,
         }
     }
 }
@@ -281,7 +281,7 @@ where
 
     unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
         Self {
-            ptr: resources.get_mut(resource_id_for::<T>()) as *mut T,
+            ptr: resources.get_mut_unchecked(resource_id_for::<T>()) as *mut T,
         }
     }
 }
