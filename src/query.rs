@@ -54,7 +54,7 @@ impl<'a> SystemData<'a> for PreparedWorld {
     type Output = Self;
 
     fn prepare(&'a mut self) -> Self::Output {
-        self
+        Self { world: self.world }
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -72,7 +72,7 @@ impl<'a> SystemData<'a> for PreparedWorld {
     }
 }
 
-impl<'a> SystemDataOutput<'a> for &'a mut PreparedWorld {
+impl<'a> SystemDataOutput<'a> for PreparedWorld {
     type SystemData = PreparedWorld;
 }
 
@@ -113,7 +113,7 @@ where
         <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
         <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
     > {
-        unsafe { &mut *self.query }.iter_chunks_unchecked(&*world.world)
+        (&mut *self.query).iter_chunks_unchecked(&*world.world)
     }
 
     /// Gets an iterator which iterates through all chunks that match the query.
@@ -177,7 +177,7 @@ where
             <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
         >,
     > {
-        unsafe { &mut *self.query }.iter_entities_unchecked(&*world.world)
+        (&mut *self.query).iter_entities_unchecked(&*world.world)
     }
 
     /// Gets an iterator which iterates through all entity data that matches the query, and also yields the the `Entity` IDs.
