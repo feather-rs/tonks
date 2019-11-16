@@ -211,7 +211,7 @@ where
 }
 
 /// System data which allows you to trigger events of a given type.
-pub struct Trigger<E>
+pub struct TriggerOwned<E>
 where
     E: Event,
 {
@@ -220,14 +220,14 @@ where
     id: EventId,
 }
 
-impl<'a, E> SystemData<'a> for Trigger<E>
+impl<'a, E> SystemData<'a> for TriggerOwned<E>
 where
     E: Event,
 {
-    type Output = &'a mut Self;
+    type Output = Trigger<E>;
 
     fn prepare(&'a mut self) -> Self::Output {
-        self
+        Trigger(self as *mut _)
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -282,11 +282,16 @@ where
     }
 }
 
-impl<'a, E> SystemDataOutput<'a> for &'a mut Trigger<E>
+/// System data output for `TriggerOwned`.
+pub struct Trigger<E>(*mut TriggerOwned<E>)
+where
+    E: Event;
+
+impl<'a, E> SystemDataOutput<'a> for Trigger<E>
 where
     E: Event,
 {
-    type SystemData = Trigger<E>;
+    type SystemData = TriggerOwned<E>;
 }
 
 impl<E> Trigger<E>
@@ -300,14 +305,14 @@ where
     where
         I: IntoIterator<Item = E>,
     {
-        self.queued.extend(iter);
+        unsafe { &mut *self.0 }.queued.extend(iter);
     }
 
     /// Triggers a single event.
     ///
     /// The event will be handled as per its handlers' `HandlingStrategy`s.
     pub fn trigger(&mut self, event: E) {
-        self.queued.push(event);
+        unsafe { &mut *self.0 }.queued.push(event);
     }
 }
 

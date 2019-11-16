@@ -14,7 +14,7 @@ mod resources;
 mod scheduler;
 mod system;
 
-pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandler, Trigger};
+pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandler, TriggerOwned};
 pub use query::{PreparedQuery, PreparedWorld, Query};
 pub use resources::{resource_id_for, ResourceId, Resources};
 pub use scheduler::{EventsBuilder, Scheduler, SchedulerBuilder};

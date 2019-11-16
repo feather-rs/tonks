@@ -20,7 +20,7 @@ where
     V: for<'v> View<'v> + DefaultFilter,
     <V as DefaultFilter>::Filter: Send + Sync + 'a,
 {
-    type Output = PreparedQuery<'a, V>;
+    type Output = PreparedQuery<V>;
 
     fn prepare(&'a mut self) -> Self::Output {
         PreparedQuery {
@@ -51,7 +51,7 @@ unsafe impl Send for PreparedWorld {}
 unsafe impl Sync for PreparedWorld {}
 
 impl<'a> SystemData<'a> for PreparedWorld {
-    type Output = &'a mut Self;
+    type Output = Self;
 
     fn prepare(&'a mut self) -> Self::Output {
         self
@@ -77,14 +77,14 @@ impl<'a> SystemDataOutput<'a> for &'a mut PreparedWorld {
 }
 
 /// A query which has been prepared for passing to a system.
-pub struct PreparedQuery<'a, V>
+pub struct PreparedQuery<V>
 where
     V: DefaultFilter + for<'v> View<'v>,
 {
-    query: &'a mut legion::query::Query<V, <V as DefaultFilter>::Filter>,
+    query: *mut legion::query::Query<V, <V as DefaultFilter>::Filter>,
 }
 
-impl<'a, V> PreparedQuery<'a, V>
+impl<V> PreparedQuery<V>
 where
     V: for<'v> View<'v> + DefaultFilter,
 {
@@ -113,7 +113,7 @@ where
         <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
         <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
     > {
-        self.query.iter_chunks_unchecked(&*world.world)
+        unsafe { &mut *self.query }.iter_chunks_unchecked(&*world.world)
     }
 
     /// Gets an iterator which iterates through all chunks that match the query.
@@ -177,7 +177,7 @@ where
             <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
         >,
     > {
-        self.query.iter_entities_unchecked(&*world.world)
+        unsafe { &mut *self.query }.iter_entities_unchecked(&*world.world)
     }
 
     /// Gets an iterator which iterates through all entity data that matches the query, and also yields the the `Entity` IDs.
@@ -591,7 +591,7 @@ where
     }
 }
 
-impl<'a, V> SystemDataOutput<'a> for PreparedQuery<'a, V>
+impl<'a, V> SystemDataOutput<'a> for PreparedQuery<V>
 where
     V: for<'v> View<'v> + DefaultFilter,
     <V as DefaultFilter>::Filter: Sync,
