@@ -28,9 +28,6 @@ criterion = "0.3"
 shred = "0.9.3"
 specs = "0.15.1"
 
-[features]
-nightly = []
-
 [[bench]]
 name = "basic"
 harness = false

@@ -1,45 +1,12 @@
 //! Type-level query APIs as wrappers over Legion queries.
 
 use crate::system::SystemCtx;
-use crate::{ResourceId, Resources, SystemData, SystemDataOutput};
+use crate::{MacroData, ResourceId, Resources, SystemData, SystemDataOutput};
 use legion::filter::EntityFilter;
 use legion::query::{
     ChunkDataIter, ChunkEntityIter, ChunkViewIter, DefaultFilter, IntoQuery, ReadOnly, View,
 };
 use legion::world::World;
-
-pub struct Query<V>
-where
-    V: for<'v> View<'v> + DefaultFilter,
-{
-    inner: legion::query::Query<V, <V as DefaultFilter>::Filter>,
-}
-
-impl<'a, V> SystemData<'a> for Query<V>
-where
-    V: for<'v> View<'v> + DefaultFilter,
-    <V as DefaultFilter>::Filter: Send + Sync + 'a,
-{
-    type Output = PreparedQuery<V>;
-
-    fn prepare(&'a mut self) -> Self::Output {
-        PreparedQuery {
-            query: &mut self.inner,
-        }
-    }
-
-    fn reads() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    fn writes() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
-        Self { inner: V::query() }
-    }
-}
 
 /// A `legion::World` wrapper which can be safely passed to systems.
 pub struct PreparedWorld {
@@ -51,10 +18,10 @@ unsafe impl Send for PreparedWorld {}
 unsafe impl Sync for PreparedWorld {}
 
 impl<'a> SystemData<'a> for PreparedWorld {
-    type Output = Self;
+    type Output = &'a mut Self;
 
     fn prepare(&'a mut self) -> Self::Output {
-        Self { world: self.world }
+        self
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -72,19 +39,63 @@ impl<'a> SystemData<'a> for PreparedWorld {
     }
 }
 
-impl<'a> SystemDataOutput<'a> for PreparedWorld {
+impl<'a> SystemDataOutput<'a> for &'a mut PreparedWorld {
     type SystemData = PreparedWorld;
 }
 
-/// A query which has been prepared for passing to a system.
-pub struct PreparedQuery<V>
-where
-    V: DefaultFilter + for<'v> View<'v>,
-{
-    query: *mut legion::query::Query<V, <V as DefaultFilter>::Filter>,
+impl MacroData for &'static mut PreparedWorld {
+    type SystemData = PreparedWorld;
 }
 
-impl<V> PreparedQuery<V>
+/// System data which allows for querying entities.
+pub struct Query<V>
+where
+    V: for<'v> View<'v> + DefaultFilter,
+{
+    query: legion::query::Query<V, <V as DefaultFilter>::Filter>,
+}
+
+impl<'a, V> SystemData<'a> for Query<V>
+where
+    V: for<'v> View<'v> + DefaultFilter,
+    <V as DefaultFilter>::Filter: Send + Sync + 'a,
+{
+    type Output = &'a mut Self;
+
+    fn prepare(&'a mut self) -> Self::Output {
+        self
+    }
+
+    fn reads() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
+        Self { query: V::query() }
+    }
+}
+
+impl<'a, V> SystemDataOutput<'a> for &'a mut Query<V>
+where
+    V: for<'v> View<'v> + DefaultFilter,
+    <V as DefaultFilter>::Filter: Send + Sync + 'a,
+{
+    type SystemData = Query<V>;
+}
+
+impl<V> MacroData for &'static mut Query<V>
+where
+    V: for<'v> View<'v> + DefaultFilter,
+    <V as DefaultFilter>::Filter: Send + Sync,
+{
+    type SystemData = Query<V>;
+}
+
+impl<V> Query<V>
 where
     V: for<'v> View<'v> + DefaultFilter,
 {
@@ -113,7 +124,7 @@ where
         <<V as DefaultFilter>::Filter as EntityFilter>::ChunksetFilter,
         <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
     > {
-        (&mut *self.query).iter_chunks_unchecked(&*world.world)
+        self.query.iter_chunks_unchecked(&*world.world)
     }
 
     /// Gets an iterator which iterates through all chunks that match the query.
@@ -177,7 +188,7 @@ where
             <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
         >,
     > {
-        (&mut *self.query).iter_entities_unchecked(&*world.world)
+        self.query.iter_entities_unchecked(&*world.world)
     }
 
     /// Gets an iterator which iterates through all entity data that matches the query, and also yields the the `Entity` IDs.
@@ -251,7 +262,7 @@ where
             <<V as DefaultFilter>::Filter as EntityFilter>::ChunkFilter,
         >,
     > {
-        (&mut *self.query).iter_unchecked(&*world.world)
+        self.query.iter_unchecked(&*world.world)
     }
 
     /// Gets an iterator which iterates through all entity data that matches the query.
@@ -314,7 +325,7 @@ where
     where
         T: Fn(<<V as View<'data>>::Iter as Iterator>::Item),
     {
-        (&mut *self.query).for_each_unchecked(&*world.world, f)
+        self.query.for_each_unchecked(&*world.world, f)
     }
 
     /// Iterates through all entity data that matches the query.
@@ -589,12 +600,4 @@ where
         // safe because the &mut PreparedWorld ensures exclusivity
         unsafe { self.par_for_each_chunk_unchecked(world, f) }
     }
-}
-
-impl<'a, V> SystemDataOutput<'a> for PreparedQuery<V>
-where
-    V: for<'v> View<'v> + DefaultFilter,
-    <V as DefaultFilter>::Filter: Sync,
-{
-    type SystemData = Query<V>;
 }

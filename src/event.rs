@@ -1,7 +1,7 @@
 use crate::mappings::Mappings;
 use crate::scheduler::TaskMessage;
 use crate::system::{SystemCtx, SystemDataOutput, SYSTEM_ID_MAPPINGS};
-use crate::{ResourceId, Resources, SystemData, SystemId};
+use crate::{MacroData, ResourceId, Resources, SystemData, SystemId};
 use lazy_static::lazy_static;
 use legion::world::World;
 use parking_lot::Mutex;
@@ -211,7 +211,7 @@ where
 }
 
 /// System data which allows you to trigger events of a given type.
-pub struct TriggerOwned<E>
+pub struct Trigger<E>
 where
     E: Event,
 {
@@ -220,14 +220,14 @@ where
     id: EventId,
 }
 
-impl<'a, E> SystemData<'a> for TriggerOwned<E>
+impl<'a, E> SystemData<'a> for Trigger<E>
 where
     E: Event,
 {
-    type Output = Trigger<E>;
+    type Output = &'a mut Self;
 
     fn prepare(&'a mut self) -> Self::Output {
-        Trigger(self as *mut _)
+        self
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -282,38 +282,31 @@ where
     }
 }
 
-/// System data output for `TriggerOwned`.
-pub struct Trigger<E>(*mut TriggerOwned<E>)
-where
-    E: Event;
-
-impl<'a, E> SystemDataOutput<'a> for Trigger<E>
-where
-    E: Event,
-{
-    type SystemData = TriggerOwned<E>;
-}
-
 impl<E> Trigger<E>
 where
-    E: Event,
+    E: Send + Sync + 'static,
 {
-    /// Triggers multiple events at once.
-    ///
-    /// Events will be handled as per their handlers' `HandlingStrategy`s.
-    pub fn trigger_batched<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = E>,
-    {
-        unsafe { &mut *self.0 }.queued.extend(iter);
+    pub fn trigger(&mut self, event: E) {
+        self.queued.push(event);
     }
 
-    /// Triggers a single event.
-    ///
-    /// The event will be handled as per its handlers' `HandlingStrategy`s.
-    pub fn trigger(&mut self, event: E) {
-        unsafe { &mut *self.0 }.queued.push(event);
+    pub fn trigger_batched(&mut self, events: impl IntoIterator<Item = E>) {
+        self.queued.extend(events);
     }
+}
+
+impl<'a, E> SystemDataOutput<'a> for &'a mut Trigger<E>
+where
+    E: Send + Sync + 'static,
+{
+    type SystemData = Trigger<E>;
+}
+
+impl<E> MacroData for &'static mut Trigger<E>
+where
+    E: Event,
+{
+    type SystemData = Trigger<E>;
 }
 
 #[cfg(test)]

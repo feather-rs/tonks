@@ -1,7 +1,12 @@
 use legion::world::World;
 use tonks::{resource_id_for, Resources, SchedulerBuilder};
 
+#[macro_use]
+extern crate tonks;
+
+#[derive(Resource)]
 pub struct Resource1(u32);
+#[derive(Resource)]
 pub struct Resource2(u32);
 
 #[test]

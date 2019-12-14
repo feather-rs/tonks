@@ -3,7 +3,7 @@
 use hashbrown::HashMap;
 use legion::query::Read;
 use legion::world::World;
-use tonks::{PreparedWorld, Query, Resources, SchedulerBuilder, System, SystemData};
+use tonks::{PreparedWorld, Query, Resources, SchedulerBuilder};
 
 #[derive(Debug)]
 struct Name(&'static str);
@@ -24,27 +24,22 @@ fn basic() {
     );
     world.insert((), vec![(Name("Undefined"), 1.0 / 0.0)]);
 
-    struct Sys;
+    #[tonks::system]
+    fn sys(query: &mut Query<(Read<Name>, Read<Age>)>, world: &mut PreparedWorld) {
+        let mut ages = HashMap::new();
 
-    impl System for Sys {
-        type SystemData = (PreparedWorld, Query<(Read<Name>, Read<Age>)>);
-
-        fn run(&mut self, (mut world, mut query): <Self::SystemData as SystemData>::Output) {
-            let mut ages = HashMap::new();
-
-            for (name, age) in query.iter(&mut world) {
-                ages.insert(name.0, age.0);
-            }
-
-            assert_eq!(ages["Jar Jar Binks"], 2);
-            assert_eq!(ages["Bill Gates"], 64);
-            assert_eq!(ages["Donald Trump"], 3);
-            assert!(!ages.contains_key("Undefined"));
+        for (name, age) in query.iter(world) {
+            ages.insert(name.0, age.0);
         }
+
+        assert_eq!(ages["Jar Jar Binks"], 2);
+        assert_eq!(ages["Bill Gates"], 64);
+        assert_eq!(ages["Donald Trump"], 3);
+        assert!(!ages.contains_key("Undefined"));
     }
 
     let mut scheduler = SchedulerBuilder::new()
-        .with(Sys)
+        .with(sys)
         .build(Resources::default());
 
     for _ in 0..2 {

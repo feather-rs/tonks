@@ -5,7 +5,26 @@ extern crate syn;
 #[macro_use]
 extern crate quote;
 
-use syn::{FnArg, ItemFn, Pat, Type};
+use syn::{FnArg, ItemFn, Pat, Type, DeriveInput};
+
+#[proc_macro_derive(Resource)]
+pub fn derive_resource(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: DeriveInput = parse_macro_input!(input as DeriveInput);
+
+    let ident = &input.ident;
+
+    let result = quote! {
+        impl tonks::MacroData for &'static #ident {
+            type SystemData = tonks::Read<#ident>;
+        }
+
+        impl tonks::MacroData for &'static mut #ident {
+            type SystemData = tonks::Write<#ident>;
+        }
+    };
+
+    result.into()
+}
 
 #[proc_macro_attribute]
 pub fn system(
@@ -32,27 +51,22 @@ pub fn system(
             _ => panic!("system cannot take `self` parameter"),
         };
 
+        let ident = match &*pat_ty.pat {
+            Pat::Ident(ident) => ident.ident.clone(),
+            _ => panic!("parameter pattern not an ident"),
+        };
+
         // Convert references to `Read<T>`/`Write<T>`
         let ty = match &*pat_ty.ty {
             Type::Reference(r) => {
                 let ty = &*r.elem;
                 let mutability = &r.mutability;
-                if mutability.is_some() {
-                    quote! {
-                        tonks::Write<#ty>
-                    }
-                } else {
-                    quote! {
-                        tonks::Read<#ty>
-                    }
+
+                quote! {
+                    <&'static #mutability #ty as tonks::MacroData>::SystemData
                 }
             },
-            ty => quote! { <#ty as tonks::SystemDataOutput>::SystemData },
-        };
-
-        let ident = match &*pat_ty.pat {
-            Pat::Ident(ident) => ident.ident.clone(),
-            _ => panic!("parameter pattern not an ident"),
+            _ty => panic!("only references may be passed to systems"),
         };
 
         resource_idents.push(ident);
@@ -64,7 +78,7 @@ pub fn system(
 
     let res = quote! {
         #[allow(non_camel_case_types)]
-        pub struct #ident;
+        struct #ident;
 
         impl tonks::System for #ident {
             type SystemData = (#(#resource_types ,)*);

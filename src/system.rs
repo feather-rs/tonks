@@ -293,8 +293,22 @@ where
     type SystemData = Write<T>;
 }
 
+// `system` macro implementation details.
+// This is used to allow for custom SystemData impls
+// which don't go through `Read` and `Write`.
+
+pub trait MacroData: 'static + Send + Sync {
+    type SystemData: for<'a> SystemData<'a>;
+}
+
+// System data tuple impls.
+
 macro_rules! impl_data {
     ( $($ty:ident),* ; $($idx:tt),*) => {
+        impl <'a, $($ty),*> MacroData for ($($ty,)*) where $($ty: MacroData),* {
+            type SystemData = ($($ty::SystemData, )*);
+        }
+
         impl <'a, $($ty),*> SystemData<'a> for ($($ty,)*) where $($ty: SystemData<'a>),* {
             type Output = ($($ty::Output ,)*);
 

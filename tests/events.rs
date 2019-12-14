@@ -3,8 +3,8 @@ use legion::world::World;
 use std::iter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tonks::{
-    resource_id_for, EventHandler, EventsBuilder, Read, Resources, System, SystemData,
-    TriggerOwned, Write,
+    resource_id_for, EventHandler, EventsBuilder, Read, Resources, System, SystemData, Trigger,
+    Write,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -15,9 +15,9 @@ fn basic() {
     struct Sys;
 
     impl System for Sys {
-        type SystemData = TriggerOwned<Ev>;
+        type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, mut trigger: <Self::SystemData as SystemData>::Output) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger(Ev(1));
             trigger.trigger_batched([Ev(2), Ev(3), Ev(5)].iter().copied());
         }
@@ -60,9 +60,9 @@ fn zero_sized() {
     struct Sys;
 
     impl System for Sys {
-        type SystemData = TriggerOwned<Ev>;
+        type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, mut trigger: <Self::SystemData as SystemData>::Output) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger(Ev);
             trigger.trigger_batched(iter::repeat(Ev).take(1023));
         }
@@ -102,9 +102,9 @@ fn multi_trigger() {
     struct Sys1;
 
     impl System for Sys1 {
-        type SystemData = TriggerOwned<Ev>;
+        type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, mut trigger: <Self::SystemData as SystemData>::Output) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger_batched([Ev(2), Ev(3)].iter().copied());
         }
     }
@@ -112,9 +112,9 @@ fn multi_trigger() {
     struct Sys2;
 
     impl System for Sys2 {
-        type SystemData = TriggerOwned<Ev>;
+        type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, mut trigger: <Self::SystemData as SystemData>::Output) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger(Ev(0xFF));
         }
     }
@@ -164,9 +164,9 @@ fn multi_handler() {
     struct Sys;
 
     impl System for Sys {
-        type SystemData = TriggerOwned<Ev>;
+        type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, mut trigger: <Self::SystemData as SystemData>::Output) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger_batched(iter::repeat(Ev(1)).take(1_000_000));
         }
     }
@@ -216,9 +216,9 @@ fn recursive_trigger() {
     struct Sys;
 
     impl System for Sys {
-        type SystemData = TriggerOwned<Ev>;
+        type SystemData = Trigger<Ev>;
 
-        fn run(&mut self, mut trigger: <Self::SystemData as SystemData>::Output) {
+        fn run(&mut self, trigger: <Self::SystemData as SystemData>::Output) {
             trigger.trigger(Ev(5));
         }
     }
@@ -226,7 +226,7 @@ fn recursive_trigger() {
     struct Handler;
 
     impl EventHandler<Ev> for Handler {
-        type HandlerData = (Read<AtomicUsize>, TriggerOwned<Ev>);
+        type HandlerData = (Read<AtomicUsize>, Trigger<Ev>);
 
         fn handle(
             &mut self,
