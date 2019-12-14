@@ -86,16 +86,14 @@ impl SchedulerBuilder {
         Self::default()
     }
 
-    /// Adds a system to the stage pipeline.
-    pub fn add<S: System + 'static>(&mut self, system: S) {
-        let system = CachedSystem::new(system);
-
+    /// Adds a boxed system to the stage pipeline.
+    pub fn add_boxed(&mut self, system: Box<dyn RawSystem>) {
         assert_valid_deps(system.resource_reads(), system.resource_writes());
 
         if let Some(stage) = self
             .stages
             .iter_mut()
-            .find(|stage| !stage.conflicts_with(&system))
+            .find(|stage| !stage.conflicts_with(&*system))
         {
             stage.add(system);
         } else {
@@ -104,6 +102,13 @@ impl SchedulerBuilder {
             new_stage.add(system);
             self.stages.push(new_stage);
         }
+    }
+
+    /// Adds a system to the stage pipeline.
+    pub fn add<S: System + 'static>(&mut self, system: S) {
+        let system = CachedSystem::new(system);
+
+        self.add_boxed(Box::new(system));
     }
 
     /// Adds a system to the stage pipeline, returning
@@ -170,7 +175,7 @@ impl Stage {
     }
 
     /// Returns whether the given system conflicts with this stage.
-    pub fn conflicts_with<S: RawSystem>(&self, system: &S) -> bool {
+    pub fn conflicts_with(&self, system: &dyn RawSystem) -> bool {
         system
             .resource_reads()
             .iter()
@@ -182,14 +187,14 @@ impl Stage {
     }
 
     /// Adds a system to this stage.
-    pub fn add<S: RawSystem + 'static>(&mut self, system: S) {
+    pub fn add(&mut self, system: Box<dyn RawSystem>) {
         system.resource_reads().iter().for_each(|resource| {
             self.reads.insert(*resource);
         });
         system.resource_writes().iter().for_each(|resource| {
             self.writes.insert(*resource);
         });
-        self.systems.push(Box::new(system));
+        self.systems.push(system);
     }
 }
 

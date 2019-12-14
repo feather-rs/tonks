@@ -20,6 +20,7 @@ lazy_static = "1.4"
 parking_lot = "0.9"
 mopa = "0.2"
 static_assertions = "1.0"
+inventory = { version = "0.1", optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
@@ -27,6 +28,9 @@ criterion = "0.3"
 # For comparison in performance
 shred = "0.9.3"
 specs = "0.15.1"
+
+[features]
+system-registry = ["tonks-macros/system-registry", "inventory"]
 
 [[bench]]
 name = "basic"

@@ -76,6 +76,14 @@ pub fn system(
     let block = &*input.block;
     let ident = &sig.ident;
 
+    let register = if cfg!(feature = "system-registry") {
+        Some(quote! {
+            tonks::inventory::submit!(tonks::RegisteredSystem(tonks::parking_lot::Mutex::new(Some(Box::new(tonks::CachedSystem::new(#ident))))));
+        })
+    } else {
+        None
+    };
+
     let res = quote! {
         #[allow(non_camel_case_types)]
         struct #ident;
@@ -87,6 +95,8 @@ pub fn system(
                 #block
             }
         }
+
+        #register
     };
     res.into()
 }
