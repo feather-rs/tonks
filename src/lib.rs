@@ -1,5 +1,3 @@
-#![feature(specialization)]
-
 #[macro_use]
 extern crate derivative;
 #[macro_use]
