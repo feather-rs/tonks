@@ -45,6 +45,9 @@ pub trait RawSystem: Send + Sync {
     /// Returns the resources written by this system.
     fn resource_writes(&self) -> &[ResourceId];
 
+    /// Initializes this system, inserting any necessary resources.
+    fn init(&mut self, resources: &mut Resources);
+
     /// Runs this system, fetching any resources from the provided `Resources`.
     ///
     /// # Safety
@@ -57,6 +60,10 @@ pub trait RawSystem: Send + Sync {
 /// A system. TODO: docs
 pub trait System: Send + Sync + 'static {
     type SystemData: for<'a> SystemData<'a>;
+
+    fn init(&mut self, resources: &mut Resources) {
+        Self::SystemData::init(resources);
+    }
 
     fn run(&mut self, data: <Self::SystemData as SystemData>::Output);
 }
@@ -98,6 +105,10 @@ impl<S: System> RawSystem for CachedSystem<S> {
         &self.resource_writes
     }
 
+    fn init(&mut self, resources: &mut Resources) {
+        self.inner.init(resources);
+    }
+
     unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx, world: &World) {
         let data = self
             .data
@@ -130,6 +141,9 @@ pub trait SystemData<'a>: Send + Sync + Sized + 'a {
     /// This function is called before every sysetm execution.
     fn prepare(&'a mut self) -> Self::Output;
 
+    /// Inserts necessary resources for this `SystemData`.
+    fn init(resources: &mut Resources);
+
     fn reads() -> Vec<ResourceId>;
     fn writes() -> Vec<ResourceId>;
 
@@ -155,6 +169,8 @@ impl<'a> SystemData<'a> for () {
     type Output = Self;
 
     fn prepare(&'a mut self) -> Self::Output {}
+
+    fn init(_resources: &mut Resources) {}
 
     fn reads() -> Vec<ResourceId> {
         vec![]
@@ -198,12 +214,16 @@ unsafe impl<T: Send + Sync + Resource> Sync for Read<T> {}
 
 impl<'a, T> SystemData<'a> for Read<T>
 where
-    T: Resource,
+    T: Resource + Default,
 {
     type Output = &'a mut Self;
 
     fn prepare(&'a mut self) -> Self::Output {
         self
+    }
+
+    fn init(resources: &mut Resources) {
+        resources.insert_if_absent(T::default());
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -223,7 +243,7 @@ where
 
 impl<'a, T> SystemDataOutput<'a> for &'a mut Read<T>
 where
-    T: Resource,
+    T: Resource + Default,
 {
     type SystemData = Read<T>;
 }
@@ -263,12 +283,16 @@ unsafe impl<T: Send + Sync + Resource> Sync for Write<T> {}
 
 impl<'a, T> SystemData<'a> for Write<T>
 where
-    T: Resource,
+    T: Resource + Default,
 {
     type Output = &'a mut Self;
 
     fn prepare(&'a mut self) -> Self::Output {
         self
+    }
+
+    fn init(resources: &mut Resources) {
+        resources.insert_if_absent(T::default());
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -288,7 +312,7 @@ where
 
 impl<'a, T> SystemDataOutput<'a> for &'a mut Write<T>
 where
-    T: Resource,
+    T: Resource + Default,
 {
     type SystemData = Write<T>;
 }
@@ -314,6 +338,10 @@ macro_rules! impl_data {
 
             fn prepare(&'a mut self) -> Self::Output {
                 ($(self.$idx.prepare() ,)*)
+            }
+
+            fn init(resources: &mut Resources) {
+                $($ty::init(resources); )*
             }
 
             fn reads() -> Vec<ResourceId> {

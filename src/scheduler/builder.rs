@@ -120,7 +120,7 @@ impl SchedulerBuilder {
 
     /// Creates a new `Scheduler` based on the stage pipeline
     /// which was built.
-    pub fn build(self, resources: Resources) -> Scheduler {
+    pub fn build(self, mut resources: Resources) -> Scheduler {
         let mut systems = vec![];
         let mut reads = vec![];
         let mut writes = vec![];
@@ -133,6 +133,11 @@ impl SchedulerBuilder {
 
             systems.push(stage.systems);
         }
+
+        systems
+            .iter_mut()
+            .flatten()
+            .for_each(|system| system.init(&mut resources));
 
         // Safety: the builder must work correctly to ensure
         // that stages are correct.

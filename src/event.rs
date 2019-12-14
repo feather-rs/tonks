@@ -230,6 +230,8 @@ where
         self
     }
 
+    fn init(_resources: &mut Resources) {}
+
     fn reads() -> Vec<ResourceId> {
         vec![]
     }

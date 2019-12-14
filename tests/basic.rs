@@ -1,7 +1,9 @@
 use legion::world::World;
 use tonks::{Read, Resources, SchedulerBuilder, System, SystemData, Write};
 
+#[derive(Default)]
 struct Resource1(u32);
+#[derive(Default)]
 struct Resource2(u32);
 
 struct TestSystem1;

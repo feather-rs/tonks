@@ -2,6 +2,7 @@
 
 use tonks::{EventHandler, EventsBuilder, Read, SchedulerBuilder, System, SystemData, Write};
 
+#[derive(Default)]
 struct Resource1(u32);
 
 struct DoubleWrite;

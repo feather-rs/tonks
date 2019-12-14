@@ -24,6 +24,8 @@ impl<'a> SystemData<'a> for PreparedWorld {
         self
     }
 
+    fn init(_resources: &mut Resources) {}
+
     fn reads() -> Vec<ResourceId> {
         vec![]
     }
@@ -65,6 +67,8 @@ where
     fn prepare(&'a mut self) -> Self::Output {
         self
     }
+
+    fn init(_resources: &mut Resources) {}
 
     fn reads() -> Vec<ResourceId> {
         vec![]

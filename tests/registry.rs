@@ -5,7 +5,7 @@ fn basic() {
     use tonks::Resource;
     use tonks::Resources;
 
-    #[derive(Resource)]
+    #[derive(Resource, Default)]
     struct Resource1(u32);
 
     #[tonks::system]

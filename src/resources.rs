@@ -133,6 +133,24 @@ impl Resources {
 
         self.resources[id.0] = UnsafeCell::new(Some(Box::new(value)));
     }
+
+    /// Inserts a resource if it is absent.
+    pub fn insert_if_absent<T: Resource>(&mut self, value: T) {
+        let id = resource_id_for::<T>();
+
+        if self.resources.len() <= id.0 {
+            // Extend resources vector
+            self.resources.extend(
+                iter::repeat_with(|| UnsafeCell::new(None)).take(id.0 - self.resources.len() + 1),
+            );
+        }
+
+        let resource = unsafe { &mut *self.resources[id.0].get() };
+        if resource.is_some() {
+            return;
+        }
+        self.resources[id.0] = UnsafeCell::new(Some(Box::new(value)));
+    }
 }
 
 #[cfg(test)]

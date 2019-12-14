@@ -1,12 +1,12 @@
 use legion::world::World;
-use tonks::{resource_id_for, Resources, SchedulerBuilder};
+use tonks::{Resources, SchedulerBuilder};
 
 #[macro_use]
 extern crate tonks;
 
-#[derive(Resource)]
+#[derive(Default, Resource)]
 pub struct Resource1(u32);
-#[derive(Resource)]
+#[derive(Default, Resource)]
 pub struct Resource2(u32);
 
 #[test]
@@ -17,20 +17,14 @@ fn basic() {
     }
 
     let mut resources = Resources::new();
-    resources.insert(Resource1(10));
-    resources.insert(Resource2(5));
+    resources.insert(Resource1(1));
 
     let mut scheduler = SchedulerBuilder::new().with(sys).build(resources);
 
     scheduler.execute(&mut World::new());
 
-    unsafe {
-        assert_eq!(
-            scheduler
-                .resources()
-                .get_unchecked::<Resource2>(resource_id_for::<Resource2>())
-                .0,
-            15
-        );
-    }
+    assert_eq!(
+        scheduler.resources().get::<Resource2>().0,
+        u32::default() + 1
+    );
 }
