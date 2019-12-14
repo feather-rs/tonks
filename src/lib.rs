@@ -1,3 +1,5 @@
+#![feature(specialization)]
+
 #[macro_use]
 extern crate derivative;
 #[macro_use]
@@ -18,6 +20,7 @@ mod registry;
 mod resources;
 mod scheduler;
 mod system;
+mod try_default;
 
 pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandler, Trigger};
 pub use query::{PreparedWorld, Query};
@@ -30,3 +33,4 @@ pub use system::{
     SystemId, Write,
 };
 pub use tonks_macros::{system, Resource};
+pub use try_default::TryDefault;

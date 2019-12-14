@@ -1,6 +1,6 @@
 use crate::resources::Resource;
 use crate::scheduler::TaskMessage;
-use crate::{mappings::Mappings, resource_id_for, ResourceId, Resources};
+use crate::{mappings::Mappings, resource_id_for, ResourceId, Resources, TryDefault};
 use bumpalo::Bump;
 use crossbeam::Sender;
 use lazy_static::lazy_static;
@@ -214,7 +214,7 @@ unsafe impl<T: Send + Sync + Resource> Sync for Read<T> {}
 
 impl<'a, T> SystemData<'a> for Read<T>
 where
-    T: Resource + Default,
+    T: Resource + TryDefault,
 {
     type Output = &'a mut Self;
 
@@ -223,7 +223,9 @@ where
     }
 
     fn init(resources: &mut Resources) {
-        resources.insert_if_absent(T::default());
+        if let Some(default) = T::try_default() {
+            resources.insert_if_absent(default);
+        }
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -243,7 +245,7 @@ where
 
 impl<'a, T> SystemDataOutput<'a> for &'a mut Read<T>
 where
-    T: Resource + Default,
+    T: Resource + TryDefault,
 {
     type SystemData = Read<T>;
 }
@@ -283,7 +285,7 @@ unsafe impl<T: Send + Sync + Resource> Sync for Write<T> {}
 
 impl<'a, T> SystemData<'a> for Write<T>
 where
-    T: Resource + Default,
+    T: Resource + TryDefault,
 {
     type Output = &'a mut Self;
 
@@ -292,7 +294,9 @@ where
     }
 
     fn init(resources: &mut Resources) {
-        resources.insert_if_absent(T::default());
+        if let Some(default) = T::try_default() {
+            resources.insert_if_absent(default);
+        }
     }
 
     fn reads() -> Vec<ResourceId> {
@@ -312,7 +316,7 @@ where
 
 impl<'a, T> SystemDataOutput<'a> for &'a mut Write<T>
 where
-    T: Resource + Default,
+    T: Resource + TryDefault,
 {
     type SystemData = Write<T>;
 }
