@@ -234,6 +234,8 @@ pub struct Scheduler {
     /// Sending end of the above channel. This can be cloned and sent to systems.
     #[derivative(Debug = "ignore")]
     sender: Sender<TaskMessage>,
+
+    is_first_run: bool,
 }
 
 impl Scheduler {
@@ -355,6 +357,8 @@ impl Scheduler {
 
             sender,
             receiver,
+
+            is_first_run: true,
         }
     }
 
@@ -373,6 +377,12 @@ impl Scheduler {
 
     /// Executes all systems and handles events.
     pub fn execute(&mut self, world: &mut World) {
+        if self.is_first_run {
+            self.is_first_run = false;
+
+            self.on_first_run(world);
+        }
+
         // Reset the task queue to the starting queue.
         self.task_queue.extend(self.starting_queue.iter().copied());
 
@@ -401,6 +411,43 @@ impl Scheduler {
 
         assert!(self.task_queue.is_empty());
         assert!(self.running_systems.is_empty());
+    }
+
+    fn on_first_run(&mut self, world: &mut World) {
+        let sender = self.sender.clone();
+        let bump = Arc::clone(&self.bump);
+        let resources = &mut self.resources;
+
+        // Initialize all systems and event handlers.
+        self.systems
+            .iter_mut()
+            .filter(|sys| sys.is_some())
+            .for_each(|sys| {
+                let sys = sys.as_mut().unwrap();
+
+                let ctx = SystemCtx {
+                    sender: sender.clone(),
+                    id: sys.id(),
+                    bump: Arc::clone(&bump),
+                };
+
+                sys.init(resources, ctx, world);
+            });
+
+        self.event_handlers
+            .iter_mut()
+            .filter(|handler| handler.is_some())
+            .for_each(|handler| {
+                let handler = handler.as_mut().unwrap();
+
+                let ctx = SystemCtx {
+                    sender: sender.clone(),
+                    id: handler.id(),
+                    bump: Arc::clone(&bump),
+                };
+
+                handler.init(resources, ctx, world);
+            })
     }
 
     /// Triggers an event manually.

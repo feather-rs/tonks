@@ -2,6 +2,8 @@
 
 use crate::system::SystemCtx;
 use crate::{MacroData, ResourceId, Resources, SystemData, SystemDataOutput};
+use hashbrown::HashSet;
+use legion::borrow::{Ref, RefMut};
 use legion::entity::Entity;
 use legion::filter::{
     ArchetypeFilterData, ChunkFilterData, ChunksetFilterData, EntityFilter, Filter,
@@ -10,11 +12,14 @@ use legion::iterator::FissileIterator;
 use legion::query::{
     Chunk, ChunkDataIter, ChunkEntityIter, ChunkViewIter, DefaultFilter, IntoQuery, ReadOnly, View,
 };
+use legion::storage::{Component, ComponentTypeId};
 use legion::world::World;
 
 /// A `legion::World` wrapper which can be safely passed to systems.
 pub struct PreparedWorld {
     world: *const World,
+    read_components: HashSet<ComponentTypeId>,
+    write_components: HashSet<ComponentTypeId>,
 }
 
 assert_impl_all!(World: Send, Sync);
@@ -24,24 +29,88 @@ unsafe impl Sync for PreparedWorld {}
 impl<'a> SystemData<'a> for PreparedWorld {
     type Output = &'a mut Self;
 
-    fn prepare(&'a mut self) -> Self::Output {
-        self
-    }
-
-    fn init(_resources: &mut Resources) {}
-
-    fn reads() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    fn writes() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, world: &World) -> Self {
+    unsafe fn load_from_resources(
+        _resources: &mut Resources,
+        _ctx: SystemCtx,
+        world: &World,
+    ) -> Self {
         Self {
             world: world as *const _,
+            read_components: HashSet::new(),
+            write_components: HashSet::new(),
         }
+    }
+
+    fn init(
+        &mut self,
+        _resources: &mut Resources,
+        component_reads: &[ComponentTypeId],
+        component_writes: &[ComponentTypeId],
+    ) {
+        self.read_components.extend(component_reads);
+        self.read_components.extend(component_writes);
+        self.write_components.extend(component_writes);
+    }
+
+    fn resource_reads() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn resource_writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn component_reads() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn component_writes() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn before_execution(&'a mut self) -> Self::Output {
+        self
+    }
+}
+
+impl PreparedWorld {
+    /// Retrieves a component immutably for the given entity.
+    ///
+    /// # Panics
+    /// Panics if this system does not have read or write access to the component.
+    /// To declare access to a component, add a query to the system which
+    /// accesses the component.
+    pub fn get_component<T: Component>(&self, entity: Entity) -> Option<Ref<T>> {
+        assert!(self.read_components.contains(&ComponentTypeId::of::<T>()));
+        unsafe { &*self.world }.get_component(entity)
+    }
+
+    /// Retrieves a component mutably for the given entity.
+    ///
+    /// # Panics
+    /// Panics if this system does not have write access to the component.
+    /// To declare access to a component, add a query to the system which
+    /// accesses the component.
+    pub fn get_component_mut<T: Component>(&mut self, entity: Entity) -> Option<RefMut<T>> {
+        assert!(self.write_components.contains(&ComponentTypeId::of::<T>()));
+        unsafe { self.get_component_mut_unchecked(entity) }
+    }
+
+    /// Retrieves a component immutably for the given entity.
+    ///
+    /// # Safety
+    /// Accessing a component which is already being concurrently accessed elsewhere is undefined behavior.
+    ///
+    /// # Panics
+    /// Panics if this system does not have read or write access to the component.
+    /// To declare access to a component, add a query to the system which
+    /// accesses the component.
+    pub unsafe fn get_component_mut_unchecked<T: Component>(
+        &self,
+        entity: Entity,
+    ) -> Option<RefMut<T>> {
+        assert!(self.write_components.contains(&ComponentTypeId::of::<T>()));
+        (&*self.world).get_component_mut_unchecked(entity)
     }
 }
 
@@ -68,22 +137,32 @@ where
 {
     type Output = &'a mut Self;
 
-    fn prepare(&'a mut self) -> Self::Output {
-        self
-    }
-
-    fn init(_resources: &mut Resources) {}
-
-    fn reads() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    fn writes() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
+    unsafe fn load_from_resources(
+        _resources: &mut Resources,
+        _ctx: SystemCtx,
+        _world: &World,
+    ) -> Self {
         Self { query: V::query() }
+    }
+
+    fn resource_reads() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn resource_writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn component_reads() -> Vec<ComponentTypeId> {
+        V::read_types()
+    }
+
+    fn component_writes() -> Vec<ComponentTypeId> {
+        V::write_types()
+    }
+
+    fn before_execution(&'a mut self) -> Self::Output {
+        self
     }
 }
 

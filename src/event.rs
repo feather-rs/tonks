@@ -3,6 +3,7 @@ use crate::scheduler::TaskMessage;
 use crate::system::{SystemCtx, SystemDataOutput, SYSTEM_ID_MAPPINGS};
 use crate::{MacroData, ResourceId, Resources, SystemData, SystemId};
 use lazy_static::lazy_static;
+use legion::storage::ComponentTypeId;
 use legion::world::World;
 use parking_lot::Mutex;
 use std::alloc::Layout;
@@ -81,6 +82,8 @@ pub unsafe trait RawEventHandler: Send + Sync + 'static {
     /// Returns the resources written by this event handler.
     fn resource_writes(&self) -> &[ResourceId];
 
+    fn init(&mut self, resources: &mut Resources, ctx: SystemCtx, world: &World);
+
     /// Handles a slice of events, accessing any needed resources.
     ///
     /// # Safety
@@ -139,6 +142,10 @@ where
     resource_reads: Vec<ResourceId>,
     /// Cached resource writes.
     resource_writes: Vec<ResourceId>,
+    /// Cached component reads.
+    component_reads: Vec<ComponentTypeId>,
+    /// Cached component writes.
+    component_writes: Vec<ComponentTypeId>,
     /// Cached handler data, or `None` if it has not yet been accessed.
     data: Option<H::HandlerData>,
 }
@@ -153,8 +160,10 @@ where
         Self {
             id: SYSTEM_ID_MAPPINGS.lock().alloc(),
             event_id: event_id_for::<E>(),
-            resource_reads: H::HandlerData::reads(),
-            resource_writes: H::HandlerData::writes(),
+            resource_reads: H::HandlerData::resource_reads(),
+            resource_writes: H::HandlerData::resource_writes(),
+            component_reads: H::HandlerData::component_reads(),
+            component_writes: H::HandlerData::component_writes(),
             data: None,
             inner,
         }
@@ -186,13 +195,19 @@ where
         &self.resource_writes
     }
 
+    fn init(&mut self, resources: &mut Resources, ctx: SystemCtx, world: &World) {
+        let mut data = unsafe { H::HandlerData::load_from_resources(resources, ctx, world) };
+        data.init(resources, &self.component_reads, &self.component_writes);
+        self.data = Some(data);
+    }
+
     unsafe fn handle_raw_batch(
         &mut self,
         events: *const (),
         events_len: usize,
-        resources: &Resources,
-        ctx: SystemCtx,
-        world: &World,
+        _resources: &Resources,
+        _ctx: SystemCtx,
+        _world: &World,
     ) {
         // https://github.com/nvzqz/static-assertions-rs/issues/21
         /*assert_eq_size!(*const [()], *const [H::Event]);
@@ -200,13 +215,11 @@ where
 
         let events = std::slice::from_raw_parts(events as *const E, events_len);
 
-        let data = self
-            .data
-            .get_or_insert_with(|| H::HandlerData::load_from_resources(resources, ctx, world));
+        let data = self.data.as_mut().unwrap();
 
-        self.inner.handle_batch(events, data.prepare());
+        self.inner.handle_batch(events, data.before_execution());
 
-        data.flush();
+        data.after_execution();
     }
 }
 
@@ -226,21 +239,11 @@ where
 {
     type Output = &'a mut Self;
 
-    fn prepare(&'a mut self) -> Self::Output {
-        self
-    }
-
-    fn init(_resources: &mut Resources) {}
-
-    fn reads() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    fn writes() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    unsafe fn load_from_resources(_resources: &Resources, ctx: SystemCtx, _world: &World) -> Self {
+    unsafe fn load_from_resources(
+        _resources: &mut Resources,
+        ctx: SystemCtx,
+        _world: &World,
+    ) -> Self {
         Self {
             ctx,
             queued: vec![],
@@ -248,7 +251,27 @@ where
         }
     }
 
-    fn flush(&mut self) {
+    fn resource_reads() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn resource_writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn component_reads() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn component_writes() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn before_execution(&'a mut self) -> Self::Output {
+        self
+    }
+
+    fn after_execution(&mut self) {
         // TODO: end-of-system handlers
 
         // Move events to bump-allocated slice and send to scheduler.

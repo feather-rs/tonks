@@ -4,6 +4,7 @@ use crate::{mappings::Mappings, resource_id_for, ResourceId, Resources, TryDefau
 use bumpalo::Bump;
 use crossbeam::Sender;
 use lazy_static::lazy_static;
+use legion::storage::ComponentTypeId;
 use legion::world::World;
 use parking_lot::Mutex;
 use std::any::TypeId;
@@ -46,7 +47,7 @@ pub trait RawSystem: Send + Sync {
     fn resource_writes(&self) -> &[ResourceId];
 
     /// Initializes this system, inserting any necessary resources.
-    fn init(&mut self, resources: &mut Resources);
+    fn init(&mut self, resources: &mut Resources, ctx: SystemCtx, world: &World);
 
     /// Runs this system, fetching any resources from the provided `Resources`.
     ///
@@ -61,10 +62,6 @@ pub trait RawSystem: Send + Sync {
 pub trait System: Send + Sync + 'static {
     type SystemData: for<'a> SystemData<'a>;
 
-    fn init(&mut self, resources: &mut Resources) {
-        Self::SystemData::init(resources);
-    }
-
     fn run(&mut self, data: <Self::SystemData as SystemData>::Output);
 }
 
@@ -76,6 +73,10 @@ pub struct CachedSystem<S: System> {
     pub(crate) resource_reads: Vec<ResourceId>,
     /// Cached resource writes.
     pub(crate) resource_writes: Vec<ResourceId>,
+    /// Cached component reads.
+    pub(crate) component_reads: Vec<ComponentTypeId>,
+    /// Cached component writes.
+    pub(crate) component_writes: Vec<ComponentTypeId>,
     /// Cached system data, or `None` if it has not yet been loaded.
     pub(crate) data: Option<S::SystemData>,
 }
@@ -84,8 +85,10 @@ impl<S: System + 'static> CachedSystem<S> {
     pub fn new(inner: S) -> Self {
         Self {
             id: SYSTEM_ID_MAPPINGS.lock().alloc(),
-            resource_reads: S::SystemData::reads(),
-            resource_writes: S::SystemData::writes(),
+            resource_reads: S::SystemData::resource_reads(),
+            resource_writes: S::SystemData::resource_writes(),
+            component_reads: S::SystemData::component_reads(),
+            component_writes: S::SystemData::component_writes(),
             data: None,
             inner,
         }
@@ -105,18 +108,18 @@ impl<S: System> RawSystem for CachedSystem<S> {
         &self.resource_writes
     }
 
-    fn init(&mut self, resources: &mut Resources) {
-        self.inner.init(resources);
+    fn init(&mut self, resources: &mut Resources, ctx: SystemCtx, world: &World) {
+        let mut data = unsafe { S::SystemData::load_from_resources(resources, ctx, world) };
+        data.init(resources, &self.component_reads, &self.component_writes);
+        self.data = Some(data);
     }
 
-    unsafe fn execute_raw(&mut self, resources: &Resources, ctx: SystemCtx, world: &World) {
-        let data = self
-            .data
-            .get_or_insert_with(|| S::SystemData::load_from_resources(resources, ctx, world));
+    unsafe fn execute_raw(&mut self, _resources: &Resources, _ctx: SystemCtx, _world: &World) {
+        let data = self.data.as_mut().unwrap();
 
-        self.inner.run(data.prepare());
+        self.inner.run(data.before_execution());
 
-        data.flush();
+        data.after_execution();
     }
 }
 
@@ -130,34 +133,52 @@ pub struct SystemCtx {
     pub(crate) bump: Arc<ThreadLocal<Bump>>,
 }
 
-/// One or more resources in a tuple.
+/// A system data type. This could include queries, event triggers, `PreparedWorld`, resource
+/// access, and tuples of `SystemData`. Users may also implement their own custom `SystemData`
+/// if needed.
 pub trait SystemData<'a>: Send + Sync + Sized + 'a {
     /// Type which is actually passed to systems.
     type Output: SystemDataOutput<'a, SystemData = Self> + 'a;
-
-    /// Prepares this `SysetmData`, returning `Self::Output`
-    /// to pass to a system.
-    ///
-    /// This function is called before every sysetm execution.
-    fn prepare(&'a mut self) -> Self::Output;
-
-    /// Inserts necessary resources for this `SystemData`.
-    fn init(resources: &mut Resources);
-
-    fn reads() -> Vec<ResourceId>;
-    fn writes() -> Vec<ResourceId>;
 
     /// Loads this `SystemData` from the provided `Resources`
     /// and `legion::World`.
     ///
     /// # Safety
     /// Only resources returned by `reads()` and `writes()` may be accessed.
-    unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx, world: &World) -> Self;
+    unsafe fn load_from_resources(resources: &mut Resources, ctx: SystemCtx, world: &World)
+        -> Self;
+
+    /// Initializes this `SystemData`. This function is called
+    /// before the system is ever run but after `load_from_resources()`.
+    ///
+    /// This function is called after all system data for a system
+    /// has been loaded using `load_from_resources()`. As a result,
+    /// this function can utilize data such as the component and resource
+    /// accesses required by other system data.
+    fn init(
+        &mut self,
+        _resources: &mut Resources,
+        _component_reads: &[ComponentTypeId],
+        _component_writes: &[ComponentTypeId],
+    ) {
+    }
+
+    fn resource_reads() -> Vec<ResourceId>;
+    fn resource_writes() -> Vec<ResourceId>;
+
+    fn component_reads() -> Vec<ComponentTypeId>;
+    fn component_writes() -> Vec<ComponentTypeId>;
+
+    /// Prepares this `SystemData`, returning `Self::Output`
+    /// to pass to a system.
+    ///
+    /// This function is called before every system execution.
+    fn before_execution(&'a mut self) -> Self::Output;
 
     /// Called at the end of every system execution.
     ///
     /// The default implementation of this function is a no-op.
-    fn flush(&mut self) {}
+    fn after_execution(&mut self) {}
 }
 
 /// Output of a `SystemData`.
@@ -168,20 +189,30 @@ pub trait SystemDataOutput<'a>: Sized + 'a {
 impl<'a> SystemData<'a> for () {
     type Output = Self;
 
-    fn prepare(&'a mut self) -> Self::Output {}
+    unsafe fn load_from_resources(
+        _resources: &mut Resources,
+        _ctx: SystemCtx,
+        _world: &World,
+    ) -> Self {
+    }
 
-    fn init(_resources: &mut Resources) {}
-
-    fn reads() -> Vec<ResourceId> {
+    fn resource_reads() -> Vec<ResourceId> {
         vec![]
     }
 
-    fn writes() -> Vec<ResourceId> {
+    fn resource_writes() -> Vec<ResourceId> {
         vec![]
     }
 
-    unsafe fn load_from_resources(_resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
+    fn component_reads() -> Vec<ComponentTypeId> {
+        vec![]
     }
+
+    fn component_writes() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn before_execution(&'a mut self) -> Self::Output {}
 }
 
 impl<'a> SystemDataOutput<'a> for () {
@@ -218,28 +249,38 @@ where
 {
     type Output = &'a mut Self;
 
-    fn prepare(&'a mut self) -> Self::Output {
-        self
-    }
-
-    fn init(resources: &mut Resources) {
+    unsafe fn load_from_resources(
+        resources: &mut Resources,
+        _ctx: SystemCtx,
+        _world: &World,
+    ) -> Self {
         if let Some(default) = T::try_default() {
             resources.insert_if_absent(default);
         }
-    }
 
-    fn reads() -> Vec<ResourceId> {
-        vec![resource_id_for::<T>()]
-    }
-
-    fn writes() -> Vec<ResourceId> {
-        vec![]
-    }
-
-    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
         Self {
             ptr: resources.get_unchecked(resource_id_for::<T>()) as *const T,
         }
+    }
+
+    fn resource_reads() -> Vec<ResourceId> {
+        vec![resource_id_for::<T>()]
+    }
+
+    fn resource_writes() -> Vec<ResourceId> {
+        vec![]
+    }
+
+    fn component_reads() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn component_writes() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn before_execution(&'a mut self) -> Self::Output {
+        self
     }
 }
 
@@ -289,28 +330,49 @@ where
 {
     type Output = &'a mut Self;
 
-    fn prepare(&'a mut self) -> Self::Output {
-        self
+    unsafe fn load_from_resources(
+        resources: &mut Resources,
+        _ctx: SystemCtx,
+        _world: &World,
+    ) -> Self {
+        if let Some(default) = T::try_default() {
+            resources.insert_if_absent(default);
+        }
+
+        Self {
+            ptr: resources.get_mut_unchecked(resource_id_for::<T>()) as *mut T,
+        }
     }
 
-    fn init(resources: &mut Resources) {
+    fn init(
+        &mut self,
+        resources: &mut Resources,
+        _component_reads: &[ComponentTypeId],
+        _component_writes: &[ComponentTypeId],
+    ) {
         if let Some(default) = T::try_default() {
             resources.insert_if_absent(default);
         }
     }
 
-    fn reads() -> Vec<ResourceId> {
+    fn resource_reads() -> Vec<ResourceId> {
         vec![]
     }
 
-    fn writes() -> Vec<ResourceId> {
+    fn resource_writes() -> Vec<ResourceId> {
         vec![resource_id_for::<T>()]
     }
 
-    unsafe fn load_from_resources(resources: &Resources, _ctx: SystemCtx, _world: &World) -> Self {
-        Self {
-            ptr: resources.get_mut_unchecked(resource_id_for::<T>()) as *mut T,
-        }
+    fn component_reads() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn component_writes() -> Vec<ComponentTypeId> {
+        vec![]
+    }
+
+    fn before_execution(&'a mut self) -> Self::Output {
+        self
     }
 }
 
@@ -340,36 +402,52 @@ macro_rules! impl_data {
         impl <'a, $($ty),*> SystemData<'a> for ($($ty,)*) where $($ty: SystemData<'a>),* {
             type Output = ($($ty::Output ,)*);
 
-            fn prepare(&'a mut self) -> Self::Output {
-                ($(self.$idx.prepare() ,)*)
+            fn before_execution(&'a mut self) -> Self::Output {
+                ($(self.$idx.before_execution() ,)*)
             }
 
-            fn init(resources: &mut Resources) {
-                $($ty::init(resources); )*
+            fn init(&mut self, resources: &mut Resources, component_reads: &[ComponentTypeId], component_writes: &[ComponentTypeId]) {
+                $(self.$idx.init(resources, component_reads, component_writes); )*
             }
 
-            fn reads() -> Vec<ResourceId> {
+            fn resource_reads() -> Vec<ResourceId> {
                 let mut res = vec![];
                 $(
-                    res.append(&mut $ty::reads());
+                    res.append(&mut $ty::resource_reads());
                 )*
                 res
             }
 
-            fn writes() -> Vec<ResourceId> {
+            fn resource_writes() -> Vec<ResourceId> {
                 let mut res = vec![];
                 $(
-                    res.append(&mut $ty::writes());
+                    res.append(&mut $ty::resource_writes());
                 )*
                 res
             }
 
-            unsafe fn load_from_resources(resources: &Resources, ctx: SystemCtx, world: &World) -> Self {
+            fn component_reads() -> Vec<ComponentTypeId> {
+                let mut res = vec![];
+                $(
+                    res.append(&mut $ty::component_reads());
+                )*
+                res
+            }
+
+            fn component_writes() -> Vec<ComponentTypeId> {
+                let mut res = vec![];
+                $(
+                    res.append(&mut $ty::component_writes());
+                )*
+                res
+            }
+
+            unsafe fn load_from_resources(resources: &mut Resources, ctx: SystemCtx, world: &World) -> Self {
                 ($($ty::load_from_resources(resources, ctx.clone(), world) ,)*)
             }
 
-            fn flush(&mut self) {
-                $(self.$idx.flush() ;)*
+            fn after_execution(&mut self) {
+                $(self.$idx.after_execution() ;)*
             }
         }
     }
