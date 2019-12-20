@@ -2,9 +2,13 @@
 
 use crate::system::SystemCtx;
 use crate::{MacroData, ResourceId, Resources, SystemData, SystemDataOutput};
-use legion::filter::EntityFilter;
+use legion::entity::Entity;
+use legion::filter::{
+    ArchetypeFilterData, ChunkFilterData, ChunksetFilterData, EntityFilter, Filter,
+};
+use legion::iterator::FissileIterator;
 use legion::query::{
-    ChunkDataIter, ChunkEntityIter, ChunkViewIter, DefaultFilter, IntoQuery, ReadOnly, View,
+    Chunk, ChunkDataIter, ChunkEntityIter, ChunkViewIter, DefaultFilter, IntoQuery, ReadOnly, View,
 };
 use legion::world::World;
 
@@ -363,7 +367,6 @@ where
     /// # Panics
     ///
     /// This function may panic if other code is concurrently accessing the same components.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub unsafe fn for_each_entities_unchecked<'b, 'data, T>(
         &'b mut self,
@@ -372,11 +375,10 @@ where
     ) where
         T: Fn((Entity, <<V as View<'data>>::Iter as Iterator>::Item)),
     {
-        (&mut *self.query).for_each_entities_unchecked(&*world.world, f)
+        self.query.for_each_entities_unchecked(&*world.world, f)
     }
 
     /// Iterates through all entity data that matches the query.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn for_each_entities_immutable<'b, 'data, T>(&'b mut self, world: &PreparedWorld, f: T)
     where
@@ -388,7 +390,6 @@ where
     }
 
     /// Iterates through all entity data that matches the query.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn for_each_entities<'b, 'data, T>(&'b mut self, world: &mut PreparedWorld, f: T)
     where
@@ -408,7 +409,6 @@ where
     /// # Panics
     ///
     /// This function may panic if other code is concurrently accessing the same components.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub unsafe fn par_entities_for_each_unchecked<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
     where
@@ -423,11 +423,10 @@ where
             ChunkFilterData<'b>,
         >>::Iter: FissileIterator,
     {
-        (&mut *self.query).par_entities_for_each_unchecked(&*world.world, f)
+        self.query.par_entities_for_each_unchecked(&*world.world, f)
     }
 
     /// Iterates through all entities that matches the query in parallel by chunk.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn par_entities_for_each_immutable<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
     where
@@ -448,7 +447,6 @@ where
     }
 
     /// Iterates through all entities that matches the query in parallel by chunk.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn par_entities_for_each<'b, T>(&'b mut self, world: &mut PreparedWorld, f: T)
     where
@@ -477,7 +475,6 @@ where
     /// # Panics
     ///
     /// This function may panic if other code is concurrently accessing the same components.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub unsafe fn par_for_each_unchecked<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
     where
@@ -492,11 +489,10 @@ where
             ChunkFilterData<'b>,
         >>::Iter: FissileIterator,
     {
-        (&mut *self.query).par_for_each_unchecked(&*world.world, f)
+        self.query.par_for_each_unchecked(&*world.world, f)
     }
 
     /// Iterates through all entity data that matches the query in parallel.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn par_for_each_immutable<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
     where
@@ -517,7 +513,6 @@ where
     }
 
     /// Iterates through all entity data that matches the query in parallel.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn par_for_each<'b, T>(&'b mut self, world: &mut PreparedWorld, f: T)
     where
@@ -546,7 +541,6 @@ where
     /// # Panics
     ///
     /// This function may panic if other code is concurrently accessing the same components.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub unsafe fn par_for_each_chunk_unchecked<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
     where
@@ -561,11 +555,10 @@ where
             ChunkFilterData<'b>,
         >>::Iter: FissileIterator,
     {
-        (&mut *self.query).par_for_each_chunk_unchecked(&*world.world, f)
+        self.query.par_for_each_chunk_unchecked(&*world.world, f)
     }
 
     /// Gets a parallel iterator of chunks that match the query.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn par_for_each_chunk_immutable<'b, T>(&'b mut self, world: &PreparedWorld, f: T)
     where
@@ -586,7 +579,6 @@ where
     }
 
     /// Gets a parallel iterator of chunks that match the query.
-    #[cfg(feature = "par-iter")]
     #[inline]
     pub fn par_for_each_chunk<'b, T>(&'b mut self, world: &mut PreparedWorld, f: T)
     where
