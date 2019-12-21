@@ -30,8 +30,11 @@ impl EventsBuilder {
         H: EventHandler<E>,
         E: Event,
     {
-        let handler = CachedEventHandler::new(handler);
+        self.add_boxed(Box::new(CachedEventHandler::new(handler)))
+    }
 
+    /// Adds a boxed event handler.
+    pub fn add_boxed(&mut self, handler: Box<dyn RawEventHandler>) {
         assert_valid_deps(handler.resource_reads(), handler.resource_writes());
 
         let event_id = handler.event_id();
@@ -41,9 +44,7 @@ impl EventsBuilder {
             _ => unimplemented!("unimplemented handle strategy"),
         };
 
-        events_vec
-            .get_mut_or_extend(event_id.0)
-            .push(Box::new(handler));
+        events_vec.get_mut_or_extend(event_id.0).push(handler);
     }
 
     /// Adds an event handler to this builder, returning the `EventsBuilder`
