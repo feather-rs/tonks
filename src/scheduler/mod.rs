@@ -448,36 +448,16 @@ impl Scheduler {
             })
     }
 
-    /// Triggers an event manually.
-    pub fn trigger<E>(&mut self, event: E, world: &mut World)
+    /// Triggers an event manually. It will be handled
+    /// on the next call to `execute()`.
+    pub fn trigger<E>(&mut self, event: E)
     where
         E: Event,
     {
-        let event_handlers = &mut self.event_handlers;
-        let end_of_tick_handlers = &self.end_of_tick_handlers;
-        let slice = &[event];
-        let sender = self.sender.clone();
-        let bump = &self.bump;
-        let resources = &self.resources;
-
-        end_of_tick_handlers
-            .get(event_id_for::<E>().0)
-            .map(|handler_ids| {
-                handler_ids.iter().for_each(|id| unsafe {
-                    let ctx = SystemCtx {
-                        id: *id,
-                        sender: sender.clone(),
-                        bump: Arc::clone(bump),
-                    };
-                    event_handlers[id.0].as_mut().unwrap().handle_raw_batch(
-                        slice.as_ptr() as *const (),
-                        1,
-                        &resources,
-                        ctx,
-                        &world,
-                    );
-                });
-            });
+        let ptr = self.bump.get_or_default().alloc(event) as *mut E as *const ();
+        let len = 1;
+        self.task_queue
+            .push_front(Task::HandleEvent(event_id_for::<E>(), ptr, len))
     }
 
     fn run_task(&mut self, task: Task, world: &mut World) {
