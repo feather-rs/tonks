@@ -302,9 +302,7 @@ impl Scheduler {
 
         for handler in end_of_dispatch_handlers.into_iter().flatten() {
             let id = handler.id().0;
-            for _ in 0..id - event_handlers.len() + 1 {
-                event_handlers.push(None);
-            }
+            let option = event_handlers.get_mut_or_extend(id);
 
             let event_id = handler.event_id().0;
 
@@ -315,7 +313,7 @@ impl Scheduler {
                 .get_mut_or_extend(event_id)
                 .extend(handler.resource_writes().iter().copied());
 
-            event_handlers[id] = Some(handler);
+            *option = Some(handler);
         }
 
         // We use a bounded channel because the only overhead

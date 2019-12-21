@@ -88,9 +88,19 @@ impl Resources {
     /// the ID. (This is checked in debug mode.)
     pub unsafe fn get_unchecked<T: Resource>(&self, id: ResourceId) -> &T {
         debug_assert_eq!(resource_id_for::<T>(), id);
-        ((&*self.resources[id.0].get())
+        ((&*self
+            .resources
+            .get(id.0)
+            .expect(&format!(
+                "failed to fetch resource of type {}",
+                std::any::type_name::<T>()
+            ))
+            .get())
             .as_ref()
-            .expect("Failed to fetch resource"))
+            .expect(&format!(
+                "failed to fetch resource of type {}",
+                std::any::type_name::<T>()
+            )))
         .as_ref()
         .downcast_ref()
         .unwrap()
@@ -108,12 +118,21 @@ impl Resources {
     pub unsafe fn get_mut_unchecked<T: Resource>(&self, id: ResourceId) -> &mut T {
         debug_assert_eq!(resource_id_for::<T>(), id);
 
-        (self.resources[id.0]
+        (self
+            .resources
+            .get(id.0)
+            .expect(&format!(
+                "failed to fetch resource of type {}",
+                std::any::type_name::<T>()
+            ))
             .get()
             .as_mut()
             .unwrap()
             .as_mut()
-            .expect("Failed to fetch resource"))
+            .expect(&format!(
+                "failed to fetch resource of type {}",
+                std::any::type_name::<T>()
+            )))
         .as_mut()
         .downcast_mut()
         .unwrap()
