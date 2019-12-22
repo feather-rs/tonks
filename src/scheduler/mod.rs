@@ -404,9 +404,6 @@ impl Scheduler {
             }
         }
 
-        // Handle `EndOfDispatch` events. Also must account
-        // for these event handlers triggering further events.
-
         assert!(self.task_queue.is_empty());
         assert!(self.running_systems.is_empty());
     }

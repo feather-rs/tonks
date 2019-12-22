@@ -45,6 +45,10 @@ pub trait RawSystem: Send + Sync {
     fn resource_reads(&self) -> &[ResourceId];
     /// Returns the resources written by this system.
     fn resource_writes(&self) -> &[ResourceId];
+    /// Returns the components read by this system.
+    fn component_reads(&self) -> &[ComponentTypeId];
+    /// Returns the components written by this system.
+    fn component_writes(&self) -> &[ComponentTypeId];
 
     /// Initializes this system, inserting any necessary resources.
     fn init(&mut self, resources: &mut Resources, ctx: SystemCtx, world: &World);
@@ -106,6 +110,14 @@ impl<S: System> RawSystem for CachedSystem<S> {
 
     fn resource_writes(&self) -> &[ResourceId] {
         &self.resource_writes
+    }
+
+    fn component_reads(&self) -> &[ComponentTypeId] {
+        &self.component_reads
+    }
+
+    fn component_writes(&self) -> &[ComponentTypeId] {
+        &self.component_writes
     }
 
     fn init(&mut self, resources: &mut Resources, ctx: SystemCtx, world: &World) {

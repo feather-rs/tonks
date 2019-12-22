@@ -8,6 +8,7 @@ use crate::{
     Resources, Scheduler, System,
 };
 use hashbrown::HashSet;
+use legion::storage::ComponentTypeId;
 
 /// Builder of event pipelines.
 #[derive(Default)]
@@ -66,6 +67,13 @@ impl EventsBuilder {
             events: self,
         }
     }
+}
+
+/// Access to either a component or a resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Access {
+    Resource(ResourceId),
+    Component(ComponentTypeId),
 }
 
 /// Builder of a stage pipeline.
@@ -154,9 +162,9 @@ struct Stage {
     /// Vector of items in this stage.
     systems: Vec<Box<dyn RawSystem>>,
     /// Set of resources which are read by this stage.
-    reads: HashSet<ResourceId>,
+    reads: HashSet<Access>,
     /// Set of resources which are written by this stage.
-    writes: HashSet<ResourceId>,
+    writes: HashSet<Access>,
 }
 
 impl Default for Stage {
@@ -180,21 +188,53 @@ impl Stage {
         system
             .resource_reads()
             .iter()
-            .any(|resource| self.writes.contains(resource))
+            .copied()
+            .any(|resource| self.writes.contains(&Access::Resource(resource)))
+            || system.resource_writes().iter().copied().any(|resource| {
+                self.reads.contains(&Access::Resource(resource))
+                    || self.writes.contains(&Access::Resource(resource))
+            })
             || system
-                .resource_writes()
+                .component_reads()
                 .iter()
-                .any(|resource| self.reads.contains(resource) || self.writes.contains(resource))
+                .copied()
+                .any(|component| self.writes.contains(&Access::Component(component)))
+            || system.component_writes().iter().copied().any(|component| {
+                self.reads.contains(&Access::Component(component))
+                    || self.writes.contains(&Access::Component(component))
+            })
     }
 
     /// Adds a system to this stage.
     pub fn add(&mut self, system: Box<dyn RawSystem>) {
-        system.resource_reads().iter().for_each(|resource| {
-            self.reads.insert(*resource);
-        });
-        system.resource_writes().iter().for_each(|resource| {
-            self.writes.insert(*resource);
-        });
+        system
+            .resource_reads()
+            .iter()
+            .copied()
+            .for_each(|resource| {
+                self.reads.insert(Access::Resource(resource));
+            });
+        system
+            .resource_writes()
+            .iter()
+            .copied()
+            .for_each(|resource| {
+                self.writes.insert(Access::Resource(resource));
+            });
+        system
+            .component_reads()
+            .iter()
+            .copied()
+            .for_each(|component| {
+                self.reads.insert(Access::Component(component));
+            });
+        system
+            .component_writes()
+            .iter()
+            .copied()
+            .for_each(|component| {
+                self.writes.insert(Access::Component(component));
+            });
         self.systems.push(system);
     }
 }
