@@ -12,6 +12,7 @@ pub extern crate inventory;
 #[cfg(feature = "system-registry")]
 pub extern crate parking_lot;
 
+mod accessor;
 mod event;
 mod mappings;
 mod query;
@@ -22,6 +23,7 @@ mod scheduler;
 mod system;
 mod try_default;
 
+pub use accessor::{EntityAccessor, QueryAccessor};
 pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandler, Trigger};
 pub use query::{PreparedWorld, Query};
 #[cfg(feature = "system-registry")]

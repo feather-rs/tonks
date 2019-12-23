@@ -17,7 +17,7 @@ use legion::world::World;
 
 /// A `legion::World` wrapper which can be safely passed to systems.
 pub struct PreparedWorld {
-    world: *const World,
+    pub(crate) world: *const World,
     read_components: HashSet<ComponentTypeId>,
     write_components: HashSet<ComponentTypeId>,
 }
