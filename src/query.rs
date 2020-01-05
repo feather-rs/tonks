@@ -112,6 +112,11 @@ impl PreparedWorld {
         assert!(self.write_components.contains(&ComponentTypeId::of::<T>()));
         (&*self.world).get_component_mut_unchecked(entity)
     }
+
+    /// Determines if the given `Entity` is alive within this `World`.
+    pub fn is_alive(&self, entity: Entity) -> bool {
+        unsafe { &*self.world }.is_alive(entity)
+    }
 }
 
 impl<'a> SystemDataOutput<'a> for &'a mut PreparedWorld {
