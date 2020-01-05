@@ -28,7 +28,7 @@ pub use event::{CachedEventHandler, Event, EventHandler, EventId, RawEventHandle
 pub use query::{PreparedWorld, Query};
 #[cfg(feature = "system-registry")]
 pub use registry::*;
-pub use resources::{resource_id_for, ResourceId, Resources};
+pub use resources::{resource_id_for, resource_id_for_component, ResourceId, Resources};
 pub use scheduler::{EventsBuilder, Scheduler, SchedulerBuilder};
 pub use system::{
     system_id_for, CachedSystem, MacroData, RawSystem, Read, System, SystemData, SystemDataOutput,

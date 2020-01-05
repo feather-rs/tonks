@@ -4,10 +4,17 @@
 
 use crate::mappings::Mappings;
 use lazy_static::lazy_static;
+use legion::storage::ComponentTypeId;
 use parking_lot::Mutex;
 use std::any::TypeId;
 use std::cell::UnsafeCell;
 use std::iter;
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum Type {
+    Resource(TypeId),
+    Component(ComponentTypeId),
+}
 
 /// ID of a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -21,12 +28,21 @@ impl From<usize> for ResourceId {
 
 lazy_static! {
     /// Mappings from `TypeId`s to `ResourceId`s.
-    pub static ref RESOURCE_ID_MAPPINGS: Mutex<Mappings<TypeId, ResourceId>> = Mutex::new(Mappings::new());
+    pub static ref RESOURCE_ID_MAPPINGS: Mutex<Mappings<Type, ResourceId>> = Mutex::new(Mappings::new());
 }
 
 /// Returns the resource ID corresponding to a given type.
 pub fn resource_id_for<T: Resource>() -> ResourceId {
-    RESOURCE_ID_MAPPINGS.lock().get_or_alloc(TypeId::of::<T>())
+    RESOURCE_ID_MAPPINGS
+        .lock()
+        .get_or_alloc(Type::Resource(TypeId::of::<T>()))
+}
+
+/// Returns the resource ID corresponding to a component type.
+pub fn resource_id_for_component(component: ComponentTypeId) -> ResourceId {
+    RESOURCE_ID_MAPPINGS
+        .lock()
+        .get_or_alloc(Type::Component(component))
 }
 
 pub trait Resource: Send + Sync + mopa::Any + 'static {}

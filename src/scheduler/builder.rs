@@ -4,8 +4,8 @@
 use crate::event::HandleStrategy;
 use crate::scheduler::OrExtend;
 use crate::{
-    CachedEventHandler, CachedSystem, Event, EventHandler, RawEventHandler, RawSystem, ResourceId,
-    Resources, Scheduler, System,
+    resource_id_for_component, CachedEventHandler, CachedSystem, Event, EventHandler,
+    RawEventHandler, RawSystem, ResourceId, Resources, Scheduler, System,
 };
 use hashbrown::HashSet;
 use legion::storage::ComponentTypeId;
@@ -138,6 +138,22 @@ impl SchedulerBuilder {
             for system in &stage.systems {
                 reads.push(system.resource_reads().to_vec());
                 writes.push(system.resource_writes().to_vec());
+
+                // Map component to resource IDs
+                reads.push(
+                    system
+                        .component_reads()
+                        .iter()
+                        .map(|component| resource_id_for_component(*component))
+                        .collect(),
+                );
+                writes.push(
+                    system
+                        .component_writes()
+                        .iter()
+                        .map(|component| resource_id_for_component(*component))
+                        .collect(),
+                );
             }
 
             systems.push(stage.systems);
