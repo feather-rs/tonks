@@ -31,8 +31,8 @@ pub use registry::*;
 pub use resources::{resource_id_for, resource_id_for_component, ResourceId, Resources};
 pub use scheduler::{EventsBuilder, Scheduler, SchedulerBuilder};
 pub use system::{
-    system_id_for, CachedSystem, MacroData, RawSystem, Read, System, SystemData, SystemDataOutput,
-    SystemId, Write,
+    system_id_for, CachedSystem, MacroData, RawSystem, Read, System, SystemCtx, SystemData,
+    SystemDataOutput, SystemId, Write,
 };
 pub use tonks_macros::{event_handler, system, Resource};
 pub use try_default::TryDefault;
