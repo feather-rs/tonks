@@ -1,7 +1,7 @@
 use crate::mappings::Mappings;
 use crate::scheduler::TaskMessage;
 use crate::system::{SystemCtx, SystemDataOutput, SYSTEM_ID_MAPPINGS};
-use crate::{MacroData, ResourceId, Resources, SystemData, SystemId};
+use crate::{resource_id_for_component, MacroData, ResourceId, Resources, SystemData, SystemId};
 use lazy_static::lazy_static;
 use legion::storage::ComponentTypeId;
 use legion::world::World;
@@ -157,11 +157,23 @@ where
 {
     /// Creates a new `CachedEventHandler` caching the given event handler.
     pub fn new(inner: H) -> Self {
+        let mut resource_reads = H::HandlerData::resource_reads();
+        resource_reads.extend(
+            H::HandlerData::component_reads()
+                .into_iter()
+                .map(|comp| resource_id_for_component(comp)),
+        );
+        let mut resource_writes = H::HandlerData::resource_writes();
+        resource_writes.extend(
+            H::HandlerData::component_writes()
+                .into_iter()
+                .map(|comp| resource_id_for_component(comp)),
+        );
         Self {
             id: SYSTEM_ID_MAPPINGS.lock().alloc(),
             event_id: event_id_for::<E>(),
-            resource_reads: H::HandlerData::resource_reads(),
-            resource_writes: H::HandlerData::resource_writes(),
+            resource_reads,
+            resource_writes,
             component_reads: H::HandlerData::component_reads(),
             component_writes: H::HandlerData::component_writes(),
             data: None,
