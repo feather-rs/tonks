@@ -46,10 +46,11 @@ pub fn system(
 
     let block = &*input.block;
     let ident = &sig.ident;
+    let name = ident.to_string();
 
     let register = if cfg!(feature = "system-registry") {
         Some(quote! {
-            tonks::inventory::submit!(tonks::SystemRegistration(tonks::parking_lot::Mutex::new(Some(Box::new(tonks::CachedSystem::new(#ident))))));
+            tonks::inventory::submit!(tonks::SystemRegistration(tonks::parking_lot::Mutex::new(Some(Box::new(tonks::CachedSystem::new(#ident, #name))))));
         })
     } else {
         None
@@ -111,12 +112,13 @@ pub fn event_handler(
         _ => unimplemented!(),
     };
 
+    let name = ident.to_string();
 
     let (resource_idents, resource_types) = find_resource_accesses(sig.inputs.iter().skip(1)); // Skip first argument
 
     let register = if cfg!(feature = "system-registry") {
         Some(quote! {
-            tonks::inventory::submit!(tonks::HandlerRegistration(tonks::parking_lot::Mutex::new(Some(Box::new(tonks::CachedEventHandler::new(#ident))))));
+            tonks::inventory::submit!(tonks::HandlerRegistration(tonks::parking_lot::Mutex::new(Some(Box::new(tonks::CachedEventHandler::new(#ident, #name))))));
         })
     } else {
         None

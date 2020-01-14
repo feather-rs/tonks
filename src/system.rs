@@ -41,6 +41,9 @@ pub trait RawSystem: Send + Sync {
     /// Returns the unique ID of this system, as allocated by `system_id_for::<T>()`.
     fn id(&self) -> SystemId;
 
+    /// Returns the name of this system.
+    fn name(&self) -> &'static str;
+
     /// Returns the resources read by this system.
     fn resource_reads(&self) -> &[ResourceId];
     /// Returns the resources written by this system.
@@ -83,10 +86,11 @@ pub struct CachedSystem<S: System> {
     pub(crate) component_writes: Vec<ComponentTypeId>,
     /// Cached system data, or `None` if it has not yet been loaded.
     pub(crate) data: Option<S::SystemData>,
+    pub(crate) name: &'static str,
 }
 
 impl<S: System + 'static> CachedSystem<S> {
-    pub fn new(inner: S) -> Self {
+    pub fn new(inner: S, name: &'static str) -> Self {
         Self {
             id: SYSTEM_ID_MAPPINGS.lock().alloc(),
             resource_reads: S::SystemData::resource_reads(),
@@ -95,6 +99,7 @@ impl<S: System + 'static> CachedSystem<S> {
             component_writes: S::SystemData::component_writes(),
             data: None,
             inner,
+            name,
         }
     }
 }
@@ -102,6 +107,10 @@ impl<S: System + 'static> CachedSystem<S> {
 impl<S: System> RawSystem for CachedSystem<S> {
     fn id(&self) -> SystemId {
         self.id
+    }
+
+    fn name(&self) -> &'static str {
+        self.name
     }
 
     fn resource_reads(&self) -> &[ResourceId] {

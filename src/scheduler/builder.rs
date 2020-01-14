@@ -31,12 +31,16 @@ impl EventsBuilder {
         H: EventHandler<E>,
         E: Event,
     {
-        self.add_boxed(Box::new(CachedEventHandler::new(handler)))
+        self.add_boxed(Box::new(CachedEventHandler::new(handler, "null")))
     }
 
     /// Adds a boxed event handler.
     pub fn add_boxed(&mut self, handler: Box<dyn RawEventHandler>) {
-        assert_valid_deps(handler.resource_reads(), handler.resource_writes());
+        assert_valid_deps(
+            handler.resource_reads(),
+            handler.resource_writes(),
+            handler.name(),
+        );
 
         let event_id = handler.event_id();
 
@@ -97,7 +101,11 @@ impl SchedulerBuilder {
 
     /// Adds a boxed system to the stage pipeline.
     pub fn add_boxed(&mut self, system: Box<dyn RawSystem>) {
-        assert_valid_deps(system.resource_reads(), system.resource_writes());
+        assert_valid_deps(
+            system.resource_reads(),
+            system.resource_writes(),
+            system.name(),
+        );
 
         if let Some(stage) = self
             .stages
@@ -115,7 +123,7 @@ impl SchedulerBuilder {
 
     /// Adds a system to the stage pipeline.
     pub fn add<S: System + 'static>(&mut self, system: S) {
-        let system = CachedSystem::new(system);
+        let system = CachedSystem::new(system, "null");
 
         self.add_boxed(Box::new(system));
     }
@@ -255,18 +263,20 @@ impl Stage {
     }
 }
 
-fn assert_valid_deps(reads: &[ResourceId], writes: &[ResourceId]) {
+fn assert_valid_deps(reads: &[ResourceId], writes: &[ResourceId], name: &str) {
     // Verify that there are no conflicts in the system's own resource access.
     // This prevents UB such as mutable aliasing.
     assert!(
         reads.iter().all(|resource| !writes.contains(resource)),
-        "system cannot read and write same resource"
+        "system {} cannot read and write same resource",
+        name
     );
     let valid_mutable = writes.iter().all(|resource| {
         !reads.contains(resource) && writes.iter().filter(|res| *res == resource).count() == 1
     });
     assert!(
         valid_mutable,
-        "system cannot have double mutable access to the same resource"
+        "system {} cannot have double mutable access to the same resource",
+        name
     );
 }

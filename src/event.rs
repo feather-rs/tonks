@@ -2,6 +2,7 @@ use crate::mappings::Mappings;
 use crate::scheduler::TaskMessage;
 use crate::system::{SystemCtx, SystemDataOutput, SYSTEM_ID_MAPPINGS};
 use crate::{resource_id_for_component, MacroData, ResourceId, Resources, SystemData, SystemId};
+use hashbrown::HashSet;
 use lazy_static::lazy_static;
 use legion::storage::ComponentTypeId;
 use legion::world::World;
@@ -70,6 +71,9 @@ impl Default for HandleStrategy {
 pub unsafe trait RawEventHandler: Send + Sync + 'static {
     /// Returns the unique ID of this event handler, as allocated by `system_id_for::<T>()`.
     fn id(&self) -> SystemId;
+
+    /// Returns the name of this event handler.
+    fn name(&self) -> &'static str;
 
     /// Returns the ID of the event which is handled by this handler.
     fn event_id(&self) -> EventId;
@@ -148,6 +152,7 @@ where
     component_writes: Vec<ComponentTypeId>,
     /// Cached handler data, or `None` if it has not yet been accessed.
     data: Option<H::HandlerData>,
+    name: &'static str,
 }
 
 impl<H, E> CachedEventHandler<H, E>
@@ -156,19 +161,26 @@ where
     E: Event,
 {
     /// Creates a new `CachedEventHandler` caching the given event handler.
-    pub fn new(inner: H) -> Self {
+    pub fn new(inner: H, name: &'static str) -> Self {
+        let component_writes = H::HandlerData::component_writes()
+            .into_iter()
+            .collect::<HashSet<_>>();
+
         let mut resource_reads = H::HandlerData::resource_reads();
         resource_reads.extend(
             H::HandlerData::component_reads()
                 .into_iter()
+                .filter(|comp| !component_writes.contains(comp))
                 .map(|comp| resource_id_for_component(comp)),
         );
+
         let mut resource_writes = H::HandlerData::resource_writes();
         resource_writes.extend(
             H::HandlerData::component_writes()
                 .into_iter()
                 .map(|comp| resource_id_for_component(comp)),
         );
+
         Self {
             id: SYSTEM_ID_MAPPINGS.lock().alloc(),
             event_id: event_id_for::<E>(),
@@ -178,6 +190,7 @@ where
             component_writes: H::HandlerData::component_writes(),
             data: None,
             inner,
+            name,
         }
     }
 }
@@ -189,6 +202,10 @@ where
 {
     fn id(&self) -> SystemId {
         self.id
+    }
+
+    fn name(&self) -> &'static str {
+        self.name
     }
 
     fn event_id(&self) -> EventId {
