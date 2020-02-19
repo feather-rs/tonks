@@ -451,10 +451,16 @@ impl Scheduler {
     where
         E: Event,
     {
+        let id = event_id_for::<E>();
+        // Don't trigger events which have no handlers.
+        if self.end_of_tick_handlers.len() <= id.0 {
+            return;
+        }
+
         let ptr = self.bump.get_or_default().alloc(event) as *mut E as *const ();
         let len = 1;
         self.task_queue
-            .push_front(Task::HandleEvent(event_id_for::<E>(), ptr, len))
+            .push_front(Task::HandleEvent(id, ptr, len));
     }
 
     fn run_task(&mut self, task: Task, world: &mut World) {
@@ -490,6 +496,9 @@ impl Scheduler {
         {
             Ok(()) => {
                 // Run task and proceed.
+                #[cfg(feature = "log")] {
+                    log::trace!("Dispatching task of type {:?} (reads: {:?}, writes: {:?})", task, reads, writes);
+                }
                 let systems = self.dispatch_task(task, world);
                 self.runnning_systems_count += systems;
             }
@@ -530,6 +539,10 @@ impl Scheduler {
                 self.stages[id.0].len()
             }
             TaskMessage::TriggerEvents { id, ptr, len } => {
+                if self.end_of_tick_handlers.len() <= id.0 {
+                    return 0;
+                }
+
                 self.task_queue.push_back(Task::HandleEvent(id, ptr, len));
                 0
             }

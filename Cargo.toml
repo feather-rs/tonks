@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 tonks-macros = { path = "macros" }
-legion = { git = "https://github.com/TomGillen/legion", rev = "940ef3bfcb77e5d074ee3184b776ff1600da228d" }
+legion = { git = "https://github.com/TomGillen/legion", rev = "0f67adc237af35799df173f31a2c238b3d8010a2" }
 crossbeam = "0.7"
 hashbrown = "0.6"
 rayon = "1.2"
@@ -21,6 +21,7 @@ parking_lot = "0.9"
 mopa = "0.2"
 static_assertions = "1.0"
 inventory = { version = "0.1", optional = true }
+log = { version = "0.4", optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
