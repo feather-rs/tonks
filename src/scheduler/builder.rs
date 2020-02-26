@@ -144,24 +144,28 @@ impl SchedulerBuilder {
 
         for stage in self.stages {
             for system in &stage.systems {
-                reads.push(system.resource_reads().to_vec());
-                writes.push(system.resource_writes().to_vec());
+                let mut system_reads = vec![];
+                let mut system_writes = vec![];
+
+                system_reads.extend(system.resource_reads().iter().copied());
+                system_writes.extend(system.resource_writes().iter().copied());
 
                 // Map component to resource IDs
-                reads.push(
+                system_reads.extend(
                     system
                         .component_reads()
                         .iter()
-                        .map(|component| resource_id_for_component(*component))
-                        .collect(),
+                        .map(|component| resource_id_for_component(*component)),
                 );
-                writes.push(
+                system_writes.extend(
                     system
                         .component_writes()
                         .iter()
-                        .map(|component| resource_id_for_component(*component))
-                        .collect(),
+                        .map(|component| resource_id_for_component(*component)),
                 );
+
+                reads.push(system_reads);
+                writes.push(system_writes);
             }
 
             systems.push(stage.systems);

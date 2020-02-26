@@ -459,8 +459,7 @@ impl Scheduler {
 
         let ptr = self.bump.get_or_default().alloc(event) as *mut E as *const ();
         let len = 1;
-        self.task_queue
-            .push_front(Task::HandleEvent(id, ptr, len));
+        self.task_queue.push_front(Task::HandleEvent(id, ptr, len));
     }
 
     fn run_task(&mut self, task: Task, world: &mut World) {
@@ -496,8 +495,14 @@ impl Scheduler {
         {
             Ok(()) => {
                 // Run task and proceed.
-                #[cfg(feature = "log")] {
-                    log::trace!("Dispatching task of type {:?} (reads: {:?}, writes: {:?})", task, reads, writes);
+                #[cfg(feature = "log")]
+                {
+                    log::trace!(
+                        "Dispatching task of type {:?} (reads: {:?}, writes: {:?})",
+                        task,
+                        reads,
+                        writes
+                    );
                 }
                 let systems = self.dispatch_task(task, world);
                 self.runnning_systems_count += systems;
