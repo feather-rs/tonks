@@ -278,8 +278,8 @@ impl Scheduler {
                 let id = system.id();
                 system_reads[id.0] = read_deps[counter].iter().copied().collect();
                 system_writes[id.0] = write_deps[counter].iter().copied().collect();
-                stage_read.extend(system_reads[counter].clone());
-                stage_write.extend(system_writes[counter].clone());
+                stage_read.extend(system_reads[id.0].clone());
+                stage_write.extend(system_writes[id.0].clone());
                 systems[id.0] = Some(system);
                 systems_in_stage.push(id);
                 counter += 1;
